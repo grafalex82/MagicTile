@@ -58,7 +58,7 @@ have been clarified.
 
 ## Running the project
 
-Once the first playable prototype exists, it will be launched with:
+Launch the graphics prototype with:
 
 ```bash
 python -m magic_tile
@@ -71,8 +71,9 @@ python -m pip install -e .
 python -m magic_tile
 ```
 
-For now, the command prints a message confirming that the project skeleton is
-ready.
+The current prototype displays a resizable pygame window with a static,
+periodically coloured flat-top hexagonal grid. Every hexagon is 200 pixels high.
+Press Escape or close the window to exit.
 
 ## Tests
 
