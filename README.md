@@ -35,7 +35,7 @@ MagicTile/
 ├── docs/
 │   ├── DESIGN.md            # Rules, controls, and open questions
 │   └── ROADMAP.md           # Implementation stages
-├── src/magic_tile/
+├── magic_tile/
 │   ├── domain/              # Board model, pieces, and moves
 │   ├── input/               # Mouse, keyboard, and macros
 │   ├── persistence/         # Saving and loading
@@ -53,8 +53,8 @@ have been clarified.
 - pygame
 - pytest for development
 
-`pyenv` is not required. Project metadata and tool configuration live in
-`pyproject.toml`.
+`pyenv` is not required. Dependencies are listed in `requirements.txt`, and the
+test configuration lives in `pytest.ini`.
 
 ## Running the project
 
@@ -64,11 +64,10 @@ Launch the graphics prototype with:
 python -m magic_tile
 ```
 
-When working with the `src` layout, first install the package locally:
+Install or update the dependencies when needed:
 
 ```bash
-python -m pip install -e .
-python -m magic_tile
+python -m pip install -r requirements.txt
 ```
 
 The current prototype displays a resizable pygame window with a static,
