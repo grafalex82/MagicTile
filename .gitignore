@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+.venv/
+venv/
+
+build/
+dist/
+
+.idea/
+.vscode/
+*.swp
+
+# Локальные сохранения игры
+saves/
+
