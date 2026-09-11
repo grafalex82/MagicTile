@@ -4,7 +4,7 @@
 
 - Draw one face and its outer ring with identifiers for every piece.
 - Describe the result of a turn as an explicit permutation.
-- Define the nine-face fundamental region and its periodicity rules.
+- Define the seven-face fundamental region and its periodicity rules.
 - Prepare several reference states for automated tests.
 
 Completion criterion: the result of any single move can be calculated
@@ -49,4 +49,3 @@ Key invariants: a move followed by its inverse restores the original state; six
 - Art, sound, and visual polish.
 - Performance profiling at distant zoom levels and with many visible copies.
 - Distribution builds for the target operating systems.
-

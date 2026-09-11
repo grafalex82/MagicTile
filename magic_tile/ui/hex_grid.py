@@ -30,6 +30,18 @@ def hex_vertices(
     ]
 
 
+def hex_center(
+    q: int, r: int, height: int = HEX_HEIGHT
+) -> tuple[float, float]:
+    """Convert axial coordinates to a center point in screen pixels.
+
+    Increasing ``r`` moves vertically down. Increasing ``q`` moves down and
+    right, so the q axis is inclined by 30 degrees to the screen horizontal.
+    """
+    width, _ = hex_dimensions(height)
+    return q * width * 0.75, (r + q / 2) * height
+
+
 def visible_hexes(
     viewport: tuple[int, int], height: int = HEX_HEIGHT
 ) -> Iterator[tuple[int, int, tuple[float, float]]]:
@@ -43,8 +55,7 @@ def visible_hexes(
     columns = math.ceil(viewport_width / horizontal_step) + 3
 
     for column in range(-2, columns):
-        offset = height / 2 if column % 2 else 0
-        center_x = column * horizontal_step
         for row in range(-2, rows):
-            center_y = row * height + offset
-            yield column, row, (center_x, center_y)
+            axial_row = row - column // 2
+            center = hex_center(column, axial_row, height)
+            yield column, axial_row, center

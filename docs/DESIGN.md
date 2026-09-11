@@ -17,9 +17,21 @@ The player sees a finite viewport onto an infinite plane and can:
 - zoom in and out;
 - select any visible face for rotation.
 
-The infinite plane is virtual. There are nine unique logical color faces that
+The infinite plane is virtual. There are seven unique logical color faces that
 repeat periodically across the plane. On-screen copies of the same logical face
 represent the same object.
+
+### Piece terminology
+
+- A `Center` is the fixed one-color element that identifies a face.
+- An `Edge` is one physical element shared by two adjacent faces and carries
+  two colors.
+- A `Corner` is one physical element shared by three mutually adjacent faces
+  and carries three colors.
+- A `Face` is the set visible around one center: one center, six edges, and six
+  corners.
+- A `FaceNeighborhood` is only a geometric helper containing one focused face
+  and the six faces around it; it is not a puzzle element.
 
 ### Moves
 
@@ -75,8 +87,8 @@ The following must be defined before the game core is implemented:
 2. What is the angle of one move? The likely choice is 60 degrees.
 3. What is the exact permutation of corner, edge, and interior pieces produced
    by a move?
-4. How are the nine faces arranged in the fundamental periodic region, and how
-   do their identifiers repeat along both axes?
+4. Which identifiers and controls should be assigned to the seven logical
+   faces?
 5. Can the player rotate any on-screen copy of a face, and how is its keyboard
    identifier selected?
 6. What are the scrambling rules: number of moves, immediate inverse moves, and
@@ -100,4 +112,3 @@ The following must be defined before the game core is implemented:
 - Animation progress is kept separate from the completed model state.
 
 These are working proposals and may change after the geometry is prototyped.
-

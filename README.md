@@ -11,7 +11,7 @@ formalized.
 
 ## Core concept
 
-- The board appears infinite but is logically composed of nine periodically
+- The board appears infinite but is logically composed of seven periodically
   repeated color faces.
 - Hexagons tile the plane without gaps: adjacent faces share an edge, and three
   faces meet at every vertex.
