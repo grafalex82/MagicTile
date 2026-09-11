@@ -42,6 +42,35 @@ def hex_center(
     return q * width * 0.75, (r + q / 2) * height
 
 
+def hex_at_point(
+    point: tuple[float, float],
+    height: float = HEX_HEIGHT,
+    offset: tuple[float, float] = (0.0, 0.0),
+) -> tuple[int, int]:
+    """Return the axial coordinate of the hexagon containing a screen point."""
+    width, _ = hex_dimensions(height)
+    point_x, point_y = point
+    offset_x, offset_y = offset
+
+    fractional_q = (point_x - offset_x) / (width * 0.75)
+    fractional_r = (point_y - offset_y) / height - fractional_q / 2
+    fractional_s = -fractional_q - fractional_r
+
+    q = round(fractional_q)
+    r = round(fractional_r)
+    s = round(fractional_s)
+    q_error = abs(q - fractional_q)
+    r_error = abs(r - fractional_r)
+    s_error = abs(s - fractional_s)
+
+    if q_error > r_error and q_error > s_error:
+        q = -r - s
+    elif r_error > s_error:
+        r = -q - s
+
+    return q, r
+
+
 def visible_hexes(
     viewport: tuple[int, int],
     height: float = HEX_HEIGHT,

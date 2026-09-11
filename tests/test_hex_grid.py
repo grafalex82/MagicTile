@@ -1,11 +1,12 @@
 import math
 
-from magic_tile import __version__
-from magic_tile.ui.hex_grid import HEX_HEIGHT, hex_center, hex_dimensions, hex_vertices
-
-
-def test_package_has_version() -> None:
-    assert __version__ == "0.1.0"
+from magic_tile.ui.hex_grid import (
+    HEX_HEIGHT,
+    hex_at_point,
+    hex_center,
+    hex_dimensions,
+    hex_vertices,
+)
 
 
 def test_hexagon_has_fixed_height() -> None:
@@ -41,3 +42,17 @@ def test_q_axis_is_inclined_down_and_right() -> None:
 
     assert next_on_q[0] > center[0]
     assert next_on_q[1] == center[1] + HEX_HEIGHT / 2
+
+
+def test_hex_at_point_finds_hexagon_centers() -> None:
+    for coordinate in ((0, 0), (3, -2), (-4, 5)):
+        assert hex_at_point(hex_center(*coordinate)) == coordinate
+
+
+def test_hex_at_point_accounts_for_zoom_and_camera_offset() -> None:
+    height = HEX_HEIGHT * 1.75
+    offset = (-123.0, 87.0)
+    center_x, center_y = hex_center(2, -3, height)
+    screen_center = center_x + offset[0], center_y + offset[1]
+
+    assert hex_at_point(screen_center, height=height, offset=offset) == (2, -3)
