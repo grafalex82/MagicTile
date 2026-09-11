@@ -70,8 +70,9 @@ Install or update the dependencies when needed:
 python -m pip install -r requirements.txt
 ```
 
-The current prototype displays a resizable pygame window with a static,
-periodically coloured flat-top hexagonal grid. Every hexagon is 200 pixels high.
+The current prototype displays a resizable pygame window with a periodically
+coloured flat-top hexagonal grid. Every hexagon is 200 pixels high. Drag with
+the left or middle mouse button to pan the infinite board in any direction.
 Press Escape or close the window to exit.
 
 ## Tests

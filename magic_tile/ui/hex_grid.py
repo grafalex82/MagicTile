@@ -43,19 +43,30 @@ def hex_center(
 
 
 def visible_hexes(
-    viewport: tuple[int, int], height: int = HEX_HEIGHT
+    viewport: tuple[int, int],
+    height: int = HEX_HEIGHT,
+    offset: tuple[float, float] = (0.0, 0.0),
 ) -> Iterator[tuple[int, int, tuple[float, float]]]:
-    """Yield axial coordinates and centres covering the whole viewport."""
+    """Yield axial coordinates and screen centres covering the viewport.
+
+    ``offset`` is the camera translation in screen pixels. It is deliberately
+    unrestricted, so the infinite board can be explored in every direction.
+    """
     viewport_width, viewport_height = viewport
     hex_width, _ = hex_dimensions(height)
     horizontal_step = hex_width * 0.75
+    offset_x, offset_y = offset
+    radius = hex_width / 2
 
-    # Start outside the visible area so resizing never exposes an empty strip.
-    rows = math.ceil(viewport_height / height) + 3
-    columns = math.ceil(viewport_width / horizontal_step) + 3
+    # Convert the viewport bounds to board space and include one extra ring.
+    min_q = math.floor((-offset_x - radius) / horizontal_step) - 1
+    max_q = math.ceil((viewport_width - offset_x + radius) / horizontal_step) + 1
 
-    for column in range(-2, columns):
-        for row in range(-2, rows):
-            axial_row = row - column // 2
-            center = hex_center(column, axial_row, height)
-            yield column, axial_row, center
+    for q in range(min_q, max_q + 1):
+        min_r = math.floor((-offset_y - height / 2) / height - q / 2) - 1
+        max_r = math.ceil(
+            (viewport_height - offset_y + height / 2) / height - q / 2
+        ) + 1
+        for r in range(min_r, max_r + 1):
+            world_x, world_y = hex_center(q, r, height)
+            yield q, r, (world_x + offset_x, world_y + offset_y)
