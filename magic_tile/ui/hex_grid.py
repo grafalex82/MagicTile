@@ -9,14 +9,14 @@ from collections.abc import Iterator
 HEX_HEIGHT = 200
 
 
-def hex_dimensions(height: int = HEX_HEIGHT) -> tuple[float, float]:
+def hex_dimensions(height: float = HEX_HEIGHT) -> tuple[float, float]:
     """Return the width and height of a regular flat-top hexagon."""
     radius = height / math.sqrt(3)
     return 2 * radius, float(height)
 
 
 def hex_vertices(
-    center: tuple[float, float], height: int = HEX_HEIGHT
+    center: tuple[float, float], height: float = HEX_HEIGHT
 ) -> list[tuple[int, int]]:
     """Build integer screen vertices for a flat-top regular hexagon."""
     cx, cy = center
@@ -31,7 +31,7 @@ def hex_vertices(
 
 
 def hex_center(
-    q: int, r: int, height: int = HEX_HEIGHT
+    q: int, r: int, height: float = HEX_HEIGHT
 ) -> tuple[float, float]:
     """Convert axial coordinates to a center point in screen pixels.
 
@@ -44,7 +44,7 @@ def hex_center(
 
 def visible_hexes(
     viewport: tuple[int, int],
-    height: int = HEX_HEIGHT,
+    height: float = HEX_HEIGHT,
     offset: tuple[float, float] = (0.0, 0.0),
 ) -> Iterator[tuple[int, int, tuple[float, float]]]:
     """Yield axial coordinates and screen centres covering the viewport.
