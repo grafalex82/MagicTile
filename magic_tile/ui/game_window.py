@@ -18,6 +18,7 @@ from magic_tile.domain import (
     PeriodicBoard,
     TurnDirection,
 )
+from magic_tile.input import TurnCommand, TurnHistory
 from magic_tile.persistence import Settings
 from magic_tile.ui.camera import Camera
 from magic_tile.ui.hex_grid import (
@@ -736,6 +737,7 @@ def run(settings: Settings) -> int:
         clock = pygame.time.Clock()
         camera = Camera()
         board = PeriodicBoard()
+        turn_history = TurnHistory()
         panning = False
         left_button_down_at: tuple[int, int] | None = None
         animation: TurnAnimation | None = None
@@ -765,6 +767,25 @@ def run(settings: Settings) -> int:
                     # Quit and Escape remain available, but puzzle/camera input
                     # is locked until the half-second turn finishes.
                     continue
+                elif event.type == pygame.KEYDOWN:
+                    shortcut_modifiers = pygame.KMOD_CTRL | pygame.KMOD_META
+                    has_undo_modifier = bool(event.mod & shortcut_modifiers)
+                    command: TurnCommand | None = None
+                    if has_undo_modifier and event.key == pygame.K_z:
+                        if event.mod & pygame.KMOD_SHIFT:
+                            command = turn_history.redo()
+                        else:
+                            command = turn_history.undo()
+                    elif has_undo_modifier and event.key == pygame.K_y:
+                        command = turn_history.redo()
+                    if command is not None:
+                        animation = TurnAnimation.begin(
+                            board,
+                            command.coordinate,
+                            command.direction,
+                            now,
+                            duration_seconds=settings.turn_animation_duration_seconds,
+                        )
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     left_button_down_at = event.pos
                     panning = False
@@ -775,10 +796,14 @@ def run(settings: Settings) -> int:
                             height=HEX_HEIGHT * camera.zoom,
                             offset=camera.offset,
                         )
+                        command = TurnCommand(
+                            HexCoordinate(q, r), TurnDirection.COUNTERCLOCKWISE
+                        )
+                        turn_history.record(command)
                         animation = TurnAnimation.begin(
                             board,
-                            HexCoordinate(q, r),
-                            TurnDirection.COUNTERCLOCKWISE,
+                            command.coordinate,
+                            command.direction,
                             now,
                             duration_seconds=settings.turn_animation_duration_seconds,
                         )
@@ -790,10 +815,12 @@ def run(settings: Settings) -> int:
                         height=HEX_HEIGHT * camera.zoom,
                         offset=camera.offset,
                     )
+                    command = TurnCommand(HexCoordinate(q, r), TurnDirection.CLOCKWISE)
+                    turn_history.record(command)
                     animation = TurnAnimation.begin(
                         board,
-                        HexCoordinate(q, r),
-                        TurnDirection.CLOCKWISE,
+                        command.coordinate,
+                        command.direction,
                         now,
                         duration_seconds=settings.turn_animation_duration_seconds,
                     )

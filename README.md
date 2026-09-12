@@ -79,7 +79,9 @@ clockwise. A turn lasts for the configured duration and locks other board
 controls. Drag with
 the left mouse button more than 5 pixels on either axis to pan. Releasing it
 within that threshold turns the face. Scroll up to zoom in or down to zoom out;
-zoom is limited to 50% through 250%. Press Escape or close the window to exit.
+zoom is limited to 50% through 250%. Use Ctrl+Z to undo and Ctrl+Y (or
+Ctrl+Shift+Z) to redo; both play the normal turn animation. Press Escape or
+close the window to exit.
 
 On startup, the game loads `settings.json` from the current directory. If the
 file does not exist, it creates one with the default settings. The currently
