@@ -15,18 +15,12 @@ def test_missing_settings_file_is_created_with_defaults(tmp_path) -> None:
 
     settings_path = tmp_path / SETTINGS_FILENAME
     assert settings_path.exists()
-    assert settings.turn_animation_duration_seconds == (
-        DEFAULT_TURN_ANIMATION_DURATION_SECONDS
-    )
-    assert json.loads(settings_path.read_text(encoding="utf-8")) == {
-        "turn_animation_duration_seconds": 0.5
-    }
+    assert settings.turn_animation_duration_seconds == (DEFAULT_TURN_ANIMATION_DURATION_SECONDS)
+    assert json.loads(settings_path.read_text(encoding="utf-8")) == {"turn_animation_duration_seconds": 0.5}
 
 
 def test_settings_file_overrides_animation_duration(tmp_path) -> None:
-    (tmp_path / SETTINGS_FILENAME).write_text(
-        '{"turn_animation_duration_seconds": 1.25}', encoding="utf-8"
-    )
+    (tmp_path / SETTINGS_FILENAME).write_text('{"turn_animation_duration_seconds": 1.25}', encoding="utf-8")
 
     settings = load_settings(tmp_path)
 

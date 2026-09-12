@@ -8,13 +8,9 @@ def test_undo_returns_inverse_turn_and_makes_it_available_for_redo() -> None:
 
     history.record(command)
 
-    assert history.undo() == TurnCommand(
-        HexCoordinate(4, -2), TurnDirection.COUNTERCLOCKWISE
-    )
+    assert history.undo() == TurnCommand(HexCoordinate(4, -2), TurnDirection.COUNTERCLOCKWISE)
     assert history.redo() == command
-    assert history.undo() == TurnCommand(
-        HexCoordinate(4, -2), TurnDirection.COUNTERCLOCKWISE
-    )
+    assert history.undo() == TurnCommand(HexCoordinate(4, -2), TurnDirection.COUNTERCLOCKWISE)
 
 
 def test_new_turn_discards_redo_history() -> None:
@@ -35,12 +31,8 @@ def test_history_is_unbounded() -> None:
     turns = 1_001
 
     for coordinate in range(turns):
-        history.record(
-            TurnCommand(HexCoordinate(coordinate, 0), TurnDirection.CLOCKWISE)
-        )
+        history.record(TurnCommand(HexCoordinate(coordinate, 0), TurnDirection.CLOCKWISE))
 
     for coordinate in reversed(range(turns)):
-        assert history.undo() == TurnCommand(
-            HexCoordinate(coordinate, 0), TurnDirection.COUNTERCLOCKWISE
-        )
+        assert history.undo() == TurnCommand(HexCoordinate(coordinate, 0), TurnDirection.COUNTERCLOCKWISE)
     assert history.undo() is None

@@ -100,6 +100,14 @@ seconds:
 pytest
 ```
 
+## Code style
+
+Source code uses a maximum line length of 110 characters. Keep calls with
+several arguments on one line when they fit within that limit; wrap them only
+when they do not. 
+
+Leave two blank lines between module-level functions and Sclasses. 
+
 ## License
 
 The source code is available under the [MIT License](LICENSE). It is a short,

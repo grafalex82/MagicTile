@@ -36,9 +36,7 @@ class TurnAnimation:
         source_colors: dict[tuple[Face, str, int], FaceColor] = {}
         for slot in board.affected_slots(face_coordinate):
             slot_face, kind, index = slot
-            values = (
-                slot_face.edge_colors if kind == "edge" else slot_face.corner_colors
-            )
+            values = slot_face.edge_colors if kind == "edge" else slot_face.corner_colors
             source_colors[slot] = values[index]
         board.turn(face_coordinate, direction)
         return cls(

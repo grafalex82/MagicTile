@@ -70,8 +70,7 @@ def test_faces_hold_their_six_neighbor_references() -> None:
     for index, face in enumerate(board.faces):
         representative = HexCoordinate(index, 0)
         expected = tuple(
-            board.face_at(representative.translated(dq, dr))
-            for dq, dr in board.NEIGHBOUR_DIRECTIONS
+            board.face_at(representative.translated(dq, dr)) for dq, dr in board.NEIGHBOUR_DIRECTIONS
         )
         assert face.neighbors == expected
 
@@ -109,18 +108,14 @@ def test_turn_uses_face_neighbor_references_after_center_colors_are_swapped() ->
     other = board.face_at(HexCoordinate(2, 0))
     focus.color, other.color = other.color, focus.color
     source_edges = tuple(
-        neighbor.edge_colors[(index + 3) % 6]
-        for index, neighbor in enumerate(focus.neighbors)
+        neighbor.edge_colors[(index + 3) % 6] for index, neighbor in enumerate(focus.neighbors)
     )
 
     board.turn(HexCoordinate(0, 0), TurnDirection.COUNTERCLOCKWISE)
 
     for destination_index, destination_face in enumerate(focus.neighbors):
         inward_edge = (destination_index + 3) % 6
-        assert (
-            destination_face.edge_colors[inward_edge]
-            is source_edges[(destination_index - 1) % 6]
-        )
+        assert destination_face.edge_colors[inward_edge] is source_edges[(destination_index - 1) % 6]
 
 
 def test_turn_moves_neighbor_stickers_in_requested_direction() -> None:

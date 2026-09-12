@@ -88,6 +88,4 @@ def test_animation_reaches_sixty_degrees_in_screen_coordinates(
         duration_seconds=duration_seconds,
     )
 
-    assert animation.angle_degrees(2.0 + duration_seconds) == pytest.approx(
-        expected_angle
-    )
+    assert animation.angle_degrees(2.0 + duration_seconds) == pytest.approx(expected_angle)

@@ -86,9 +86,7 @@ class Face:
     color: FaceColor
     edge_colors: tuple[FaceColor, ...] = ()
     corner_colors: tuple[FaceColor, ...] = ()
-    _neighbors: tuple[Face, ...] | None = field(
-        default=None, init=False, repr=False, compare=False
-    )
+    _neighbors: tuple[Face, ...] | None = field(default=None, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not self.edge_colors:
@@ -147,9 +145,8 @@ class PeriodicBoard:
             representative = HexCoordinate(index, 0)
             face._connect_neighbors(
                 tuple(
-                    self.face_at(representative.translated(dq, dr))
-                    for dq, dr in self.NEIGHBOUR_DIRECTIONS
-                )
+                    self.face_at(representative.translated(dq, dr)) for dq, dr in self.NEIGHBOUR_DIRECTIONS
+                ),
             )
 
     @property
@@ -206,26 +203,22 @@ class PeriodicBoard:
                 destination_index = (source_index + step) % 6
 
                 new_edges[focus][destination_index] = old_edges[focus][source_index]
-                new_corners[focus][destination_index] = old_corners[focus][
-                    source_index
-                ]
+                new_corners[focus][destination_index] = old_corners[focus][source_index]
 
                 source_neighbor = focus.neighbors[source_index]
                 destination_neighbor = focus.neighbors[destination_index]
                 source_edge = (source_index + 3) % 6
                 destination_edge = (destination_index + 3) % 6
-                new_edges[destination_neighbor][destination_edge] = old_edges[
-                    source_neighbor
-                ][source_edge]
+                new_edges[destination_neighbor][destination_edge] = old_edges[source_neighbor][source_edge]
 
                 for source_corner in (
                     (source_index + 2) % 6,
                     (source_index + 3) % 6,
                 ):
                     destination_corner = (source_corner + step) % 6
-                    new_corners[destination_neighbor][destination_corner] = (
-                        old_corners[source_neighbor][source_corner]
-                    )
+                    new_corners[destination_neighbor][destination_corner] = old_corners[source_neighbor][
+                        source_corner
+                    ]
 
         for face in self._faces:
             face.edge_colors = tuple(new_edges[face])
@@ -248,9 +241,7 @@ class PeriodicBoard:
 
     def sticker_state(self) -> tuple[tuple[FaceColor, ...], ...]:
         """Return a stable snapshot in face-configuration order."""
-        return tuple(
-            face.edge_colors + face.corner_colors for face in self._faces
-        )
+        return tuple(face.edge_colors + face.corner_colors for face in self._faces)
 
 
 BOARD = PeriodicBoard()

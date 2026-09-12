@@ -46,9 +46,7 @@ TURN_GUIDE_DIAMETER_SCALE = 1.55
 PAN_START_DISTANCE_PX = 5
 
 
-def _left_drag_started(
-    button_down_at: tuple[int, int], current_position: tuple[int, int]
-) -> bool:
+def _left_drag_started(button_down_at: tuple[int, int], current_position: tuple[int, int]) -> bool:
     """Return whether a left-button gesture has become a camera drag."""
     return any(
         abs(current - initial) > PAN_START_DISTANCE_PX
@@ -160,9 +158,7 @@ def draw_board(
     hex_height = HEX_HEIGHT * zoom
 
     # Materialize the visible cells once because every rendering layer uses them.
-    visible = list(
-        visible_hexes(surface.get_size(), height=hex_height, offset=offset)
-    )
+    visible = list(visible_hexes(surface.get_size(), height=hex_height, offset=offset))
 
     piece_width = max(1, round(PIECE_GRID_WIDTH * zoom))
     cache_key = (surface.get_size(), offset, zoom)
@@ -195,10 +191,7 @@ def draw_board(
         # pygame draws a circle's stroke inward from its nominal radius.
         # Place the highlight on the middle of that dividing stroke rather
         # than on its outer boundary.
-        highlight_radius = round(
-            guide_radius
-            + (TURN_GUIDE_HIGHLIGHT_WIDTH - 1) / 2
-        )
+        highlight_radius = round(guide_radius + (TURN_GUIDE_HIGHLIGHT_WIDTH - 1) / 2)
         for q, r, center in visible:
             if board.face_at(HexCoordinate(q, r)) in highlighted_faces:
                 pygame.draw.circle(
@@ -224,12 +217,10 @@ def _draw_faces(
     for q, r, center in visible:
         face = board.face_at(HexCoordinate(q, r))
         edge_colors = tuple(
-            overrides.get((face, "edge", index), color)
-            for index, color in enumerate(face.edge_colors)
+            overrides.get((face, "edge", index), color) for index, color in enumerate(face.edge_colors)
         )
         corner_colors = tuple(
-            overrides.get((face, "corner", index), color)
-            for index, color in enumerate(face.corner_colors)
+            overrides.get((face, "corner", index), color) for index, color in enumerate(face.corner_colors)
         )
         face_surface = _render_curved_face(
             max(1, round(hex_height)),
@@ -267,9 +258,7 @@ def _render_curved_face(
 
 
 @lru_cache(maxsize=32)
-def _curved_face_geometry(
-    height: int, piece_width: int, grid_width: int
-) -> _CurvedFaceGeometry:
+def _curved_face_geometry(height: int, piece_width: int, grid_width: int) -> _CurvedFaceGeometry:
     """Build circle-intersection masks once for a size and line width."""
     supersampling = 2
     render_height = height * supersampling
@@ -354,9 +343,7 @@ def _curved_face_geometry(
     )
 
 
-def _blit_mask_color(
-    surface: pygame.Surface, mask: pygame.mask.Mask, color: FaceColor
-) -> None:
+def _blit_mask_color(surface: pygame.Surface, mask: pygame.mask.Mask, color: FaceColor) -> None:
     """Fill one precomputed geometric mask with a model color."""
     mask.to_surface(
         surface=surface,
@@ -425,9 +412,7 @@ def _prepare_turn_cache(
         face = board.face_at(HexCoordinate(q, r))
         if face not in turning_faces:
             continue
-        centers.append(
-            (face, (round(turn_center[0]), round(turn_center[1])))
-        )
+        centers.append((face, (round(turn_center[0]), round(turn_center[1]))))
     return _TurnRenderCache(cache_key, surface.copy(), tuple(centers))
 
 
@@ -457,31 +442,19 @@ def _render_turn_frame(
 
     def rotated_point(point: tuple[int, int]) -> tuple[int, int]:
         return (
-            round(
-                turn_center[0]
-                + point[0] * cosine
-                - point[1] * sine
-            ),
-            round(
-                turn_center[1]
-                + point[0] * sine
-                + point[1] * cosine
-            ),
+            round(turn_center[0] + point[0] * cosine - point[1] * sine),
+            round(turn_center[1] + point[0] * sine + point[1] * cosine),
         )
 
     for face, cell in zip(faces, cells):
         vertices = tuple(rotated_point(point) for point in cell.vertices)
 
         edge_colors = tuple(
-            animation.source_colors.get(
-                (face, "edge", index), color
-            )
+            animation.source_colors.get((face, "edge", index), color)
             for index, color in enumerate(face.edge_colors)
         )
         corner_colors = tuple(
-            animation.source_colors.get(
-                (face, "corner", index), color
-            )
+            animation.source_colors.get((face, "corner", index), color)
             for index, color in enumerate(face.corner_colors)
         )
         pygame.draw.polygon(rendered, face.color.rgb, vertices)
@@ -498,9 +471,7 @@ def _render_turn_frame(
             corner_polygon = [rotated_point(point) for point in corner]
             corner_polygons.append(corner_polygon)
             if len(corner_polygon) >= 3:
-                pygame.draw.polygon(
-                    rendered, corner_colors[index].rgb, corner_polygon
-                )
+                pygame.draw.polygon(rendered, corner_colors[index].rgb, corner_polygon)
 
         for polygon in edge_polygons + corner_polygons:
             if len(polygon) >= 3:
@@ -608,9 +579,7 @@ def _turn_vector_geometry(height: int) -> tuple[_TurnCellGeometry, ...]:
     return tuple(cells)
 
 
-def _circle_polygon(
-    center: tuple[int, int], radius: int, segments: int
-) -> list[tuple[int, int]]:
+def _circle_polygon(center: tuple[int, int], radius: int, segments: int) -> list[tuple[int, int]]:
     """Approximate a circle densely enough for a smooth filled boundary."""
     return [
         (
@@ -652,9 +621,7 @@ def _circle_lens_polygon(
     midpoint = ((first[0] + second[0]) / 2, (first[1] + second[1]) / 2)
     return sorted(
         set(points),
-        key=lambda point: math.atan2(
-            point[1] - midpoint[1], point[0] - midpoint[0]
-        ),
+        key=lambda point: math.atan2(point[1] - midpoint[1], point[0] - midpoint[0]),
     )
 
 
@@ -676,9 +643,7 @@ def _clip_convex_polygon(
                 - (clip_end[1] - clip_start[1]) * (point[0] - clip_start[0])
             ) >= 0
 
-        def intersection(
-            first: tuple[float, float], second: tuple[float, float]
-        ) -> tuple[float, float]:
+        def intersection(first: tuple[float, float], second: tuple[float, float]) -> tuple[float, float]:
             segment_x = second[0] - first[0]
             segment_y = second[1] - first[1]
             clip_x = clip_end[0] - clip_start[0]
@@ -686,10 +651,9 @@ def _clip_convex_polygon(
             denominator = segment_x * clip_y - segment_y * clip_x
             if denominator == 0:
                 return second
-            amount = (
-                (clip_start[0] - first[0]) * clip_y
-                - (clip_start[1] - first[1]) * clip_x
-            ) / denominator
+            start_x = clip_start[0] - first[0]
+            start_y = clip_start[1] - first[1]
+            amount = (start_x * clip_y - start_y * clip_x) / denominator
             return first[0] + amount * segment_x, first[1] + amount * segment_y
 
         previous = input_points[-1]
@@ -796,9 +760,7 @@ def run(settings: Settings) -> int:
                             height=HEX_HEIGHT * camera.zoom,
                             offset=camera.offset,
                         )
-                        command = TurnCommand(
-                            HexCoordinate(q, r), TurnDirection.COUNTERCLOCKWISE
-                        )
+                        command = TurnCommand(HexCoordinate(q, r), TurnDirection.COUNTERCLOCKWISE)
                         turn_history.record(command)
                         animation = TurnAnimation.begin(
                             board,
@@ -827,9 +789,7 @@ def run(settings: Settings) -> int:
                 elif event.type == pygame.MOUSEMOTION:
                     mouse_inside = True
                     if left_button_down_at is not None:
-                        if panning or _left_drag_started(
-                            left_button_down_at, event.pos
-                        ):
+                        if panning or _left_drag_started(left_button_down_at, event.pos):
                             panning = True
                             camera.pan(*event.rel)
                 elif event.type == pygame.MOUSEWHEEL:

@@ -18,8 +18,7 @@ def test_visible_hexes_follow_camera_offset() -> None:
 
     assert visible
     assert any(
-        -HEX_HEIGHT <= center_x <= 1280 + HEX_HEIGHT
-        and -HEX_HEIGHT <= center_y <= 800 + HEX_HEIGHT
+        -HEX_HEIGHT <= center_x <= 1280 + HEX_HEIGHT and -HEX_HEIGHT <= center_y <= 800 + HEX_HEIGHT
         for _, _, (center_x, center_y) in visible
     )
 

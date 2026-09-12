@@ -39,9 +39,7 @@ def load_settings(directory: Path | None = None) -> Settings:
     try:
         duration = data["turn_animation_duration_seconds"]
     except (KeyError, TypeError) as error:
-        raise ValueError(
-            "Settings must contain 'turn_animation_duration_seconds'."
-        ) from error
+        raise ValueError("Settings must contain 'turn_animation_duration_seconds'.") from error
 
     if isinstance(duration, bool) or not isinstance(duration, (int, float)):
         raise ValueError("'turn_animation_duration_seconds' must be a number.")
@@ -53,6 +51,4 @@ def load_settings(directory: Path | None = None) -> Settings:
 
 def _write_default_settings(settings_path: Path, settings: Settings) -> None:
     """Create the initial settings file for future editable configuration."""
-    settings_path.write_text(
-        json.dumps(asdict(settings), indent=2) + "\n", encoding="utf-8"
-    )
+    settings_path.write_text(json.dumps(asdict(settings), indent=2) + "\n", encoding="utf-8")
