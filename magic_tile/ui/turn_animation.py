@@ -7,8 +7,6 @@ from dataclasses import dataclass, field
 
 from magic_tile.domain import FaceColor, PeriodicBoard, TurnDirection
 
-TURN_DURATION_SECONDS = 0.5
-
 
 @dataclass(slots=True)
 class TurnAnimation:
@@ -18,6 +16,7 @@ class TurnAnimation:
     direction: TurnDirection
     started_at: float
     source_colors: dict[tuple[FaceColor, str, int], FaceColor]
+    duration_seconds: float
     render_cache: object | None = field(default=None, repr=False, compare=False)
     completion_frame_shown: bool = field(default=False, repr=False, compare=False)
 
@@ -28,6 +27,7 @@ class TurnAnimation:
         face_color: FaceColor,
         direction: TurnDirection,
         started_at: float,
+        duration_seconds: float,
     ) -> TurnAnimation:
         """Capture the old colors, then immediately update the exact model."""
         source_colors: dict[tuple[FaceColor, str, int], FaceColor] = {}
@@ -37,11 +37,11 @@ class TurnAnimation:
             values = face.edge_colors if kind == "edge" else face.corner_colors
             source_colors[slot] = values[index]
         board.turn(face_color, direction)
-        return cls(face_color, direction, started_at, source_colors)
+        return cls(face_color, direction, started_at, source_colors, duration_seconds)
 
     def progress(self, now: float) -> float:
         """Return linear elapsed progress clamped to the animation duration."""
-        return min(1.0, max(0.0, (now - self.started_at) / TURN_DURATION_SECONDS))
+        return min(1.0, max(0.0, (now - self.started_at) / self.duration_seconds))
 
     def angle_degrees(self, now: float) -> float:
         """Return a smooth 0-to-60-degree visual rotation."""

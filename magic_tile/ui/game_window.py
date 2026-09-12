@@ -17,6 +17,7 @@ from magic_tile.domain import (
     PeriodicBoard,
     TurnDirection,
 )
+from magic_tile.persistence import Settings
 from magic_tile.ui.camera import Camera
 from magic_tile.ui.hex_grid import (
     HEX_HEIGHT,
@@ -711,8 +712,8 @@ def _circular_alpha_mask(radius: int, padding: int = 3) -> pygame.Surface:
     return mask
 
 
-def run() -> int:
-    """Open the main window and run its event/render loop."""
+def run(settings: Settings) -> int:
+    """Open the main window and run its event/render loop using *settings*."""
     pygame.init()
     try:
         screen = pygame.display.set_mode(WINDOW_SIZE, pygame.RESIZABLE)
@@ -764,7 +765,13 @@ def run() -> int:
                         if event.button == 1
                         else TurnDirection.CLOCKWISE
                     )
-                    animation = TurnAnimation.begin(board, face_color, direction, now)
+                    animation = TurnAnimation.begin(
+                        board,
+                        face_color,
+                        direction,
+                        now,
+                        duration_seconds=settings.turn_animation_duration_seconds,
+                    )
                     panning = False
                 elif event.type == pygame.MOUSEMOTION and panning:
                     mouse_inside = True

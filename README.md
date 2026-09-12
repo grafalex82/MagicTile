@@ -73,9 +73,21 @@ python -m pip install -r requirements.txt
 The prototype displays a resizable pygame window with a periodically coloured
 flat-top hexagonal grid. Every hexagon is 200 pixels high. Left-click a face to
 turn every copy of that logical face counterclockwise; right-click to turn it
-clockwise. A turn lasts 0.5 seconds and locks other board controls. Drag with
+clockwise. A turn lasts for the configured duration and locks other board
+controls. Drag with
 the middle mouse button to pan. Scroll up to zoom in or down to zoom out; zoom
 is limited to 50% through 250%. Press Escape or close the window to exit.
+
+On startup, the game loads `settings.json` from the current directory. If the
+file does not exist, it creates one with the default settings. The currently
+supported option is `turn_animation_duration_seconds`, which defaults to 0.5
+seconds:
+
+```json
+{
+  "turn_animation_duration_seconds": 0.5
+}
+```
 
 ## Tests
 

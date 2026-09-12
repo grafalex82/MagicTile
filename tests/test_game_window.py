@@ -30,7 +30,11 @@ def test_curved_geometry_builds_six_circle_cut_edges_and_corners() -> None:
 def test_procedural_turn_frame_has_no_pixels_outside_its_mask() -> None:
     board = PeriodicBoard()
     animation = TurnAnimation.begin(
-        board, FaceColor.WHITE, TurnDirection.CLOCKWISE, started_at=0.0
+        board,
+        FaceColor.WHITE,
+        TurnDirection.CLOCKWISE,
+        started_at=0.0,
+        duration_seconds=0.5,
     )
 
     frame = _render_turn_frame(board, animation, angle_degrees=23.0, zoom=1.0)
