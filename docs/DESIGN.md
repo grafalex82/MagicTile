@@ -57,15 +57,15 @@ face consists entirely of pieces of its own color.
 
 ### Controls
 
-- Left mouse button: rotate the selected face counterclockwise.
+- Left mouse button: rotate the selected face counterclockwise when released
+  within 5 pixels on both axes; drag it farther to pan the camera.
 - Right mouse button: rotate the selected face clockwise.
 - Keyboard: alternative face selection and rotation controls.
 - Macros: bind repeatable move sequences to keyboard shortcuts.
 - Setup moves: record a preparation sequence and later undo that sequence in
   reverse order.
 
-Middle-button dragging pans the camera. Keyboard bindings have not yet been
-selected.
+Keyboard bindings have not yet been selected.
 
 ### Saves and menus
 

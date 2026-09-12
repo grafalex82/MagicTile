@@ -2,6 +2,7 @@ import pygame
 
 from magic_tile.domain import HexCoordinate, PeriodicBoard, TurnDirection
 from magic_tile.ui.game_window import (
+    _left_drag_started,
     _circular_alpha_mask,
     _curved_face_geometry,
     _render_turn_frame,
@@ -16,6 +17,14 @@ def test_circular_mask_has_opaque_center_and_transparent_corners() -> None:
     assert mask.get_at((33, 33)).a == 255
     assert mask.get_at((0, 0)).a == 0
     assert mask.get_at((66, 66)).a == 0
+
+
+def test_left_drag_starts_only_after_moving_more_than_five_pixels_on_an_axis() -> None:
+    button_down_at = (100, 100)
+
+    assert not _left_drag_started(button_down_at, (105, 105))
+    assert _left_drag_started(button_down_at, (106, 100))
+    assert _left_drag_started(button_down_at, (100, 94))
 
 
 def test_curved_geometry_builds_six_circle_cut_edges_and_corners() -> None:

@@ -40,6 +40,19 @@ TURN_GUIDE_HIGHLIGHT_COLOR = pygame.Color("#ff4040")
 TURN_GUIDE_HIGHLIGHT_WIDTH = 2
 # The hover indicator reaches beyond every corner and into the moving ring.
 TURN_GUIDE_DIAMETER_SCALE = 1.55
+# A left-button movement must pass this distance on either screen axis before
+# it becomes a camera drag instead of a face turn.
+PAN_START_DISTANCE_PX = 5
+
+
+def _left_drag_started(
+    button_down_at: tuple[int, int], current_position: tuple[int, int]
+) -> bool:
+    """Return whether a left-button gesture has become a camera drag."""
+    return any(
+        abs(current - initial) > PAN_START_DISTANCE_PX
+        for initial, current in zip(button_down_at, current_position, strict=True)
+    )
 
 
 @dataclass(slots=True)
@@ -724,6 +737,7 @@ def run(settings: Settings) -> int:
         camera = Camera()
         board = PeriodicBoard()
         panning = False
+        left_button_down_at: tuple[int, int] | None = None
         animation: TurnAnimation | None = None
         mouse_inside = pygame.mouse.get_focused()
         running = True
@@ -751,35 +765,46 @@ def run(settings: Settings) -> int:
                     # Quit and Escape remain available, but puzzle/camera input
                     # is locked until the half-second turn finishes.
                     continue
-                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 2:
-                    panning = True
-                elif event.type == pygame.MOUSEBUTTONUP and event.button == 2:
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    left_button_down_at = event.pos
                     panning = False
-                elif event.type == pygame.MOUSEBUTTONDOWN and event.button in (1, 3):
+                elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                    if left_button_down_at is not None and not panning:
+                        q, r = hex_at_point(
+                            left_button_down_at,
+                            height=HEX_HEIGHT * camera.zoom,
+                            offset=camera.offset,
+                        )
+                        animation = TurnAnimation.begin(
+                            board,
+                            HexCoordinate(q, r),
+                            TurnDirection.COUNTERCLOCKWISE,
+                            now,
+                            duration_seconds=settings.turn_animation_duration_seconds,
+                        )
+                    left_button_down_at = None
+                    panning = False
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
                     q, r = hex_at_point(
                         event.pos,
                         height=HEX_HEIGHT * camera.zoom,
                         offset=camera.offset,
                     )
-                    face_coordinate = HexCoordinate(q, r)
-                    direction = (
-                        TurnDirection.COUNTERCLOCKWISE
-                        if event.button == 1
-                        else TurnDirection.CLOCKWISE
-                    )
                     animation = TurnAnimation.begin(
                         board,
-                        face_coordinate,
-                        direction,
+                        HexCoordinate(q, r),
+                        TurnDirection.CLOCKWISE,
                         now,
                         duration_seconds=settings.turn_animation_duration_seconds,
                     )
-                    panning = False
-                elif event.type == pygame.MOUSEMOTION and panning:
-                    mouse_inside = True
-                    camera.pan(*event.rel)
                 elif event.type == pygame.MOUSEMOTION:
                     mouse_inside = True
+                    if left_button_down_at is not None:
+                        if panning or _left_drag_started(
+                            left_button_down_at, event.pos
+                        ):
+                            panning = True
+                            camera.pan(*event.rel)
                 elif event.type == pygame.MOUSEWHEEL:
                     camera.zoom_by(event.y, pygame.mouse.get_pos())
 
