@@ -1,6 +1,6 @@
 import pygame
 
-from magic_tile.domain import FaceColor, PeriodicBoard, TurnDirection
+from magic_tile.domain import HexCoordinate, PeriodicBoard, TurnDirection
 from magic_tile.ui.game_window import (
     _circular_alpha_mask,
     _curved_face_geometry,
@@ -31,13 +31,18 @@ def test_procedural_turn_frame_has_no_pixels_outside_its_mask() -> None:
     board = PeriodicBoard()
     animation = TurnAnimation.begin(
         board,
-        FaceColor.WHITE,
+        HexCoordinate(0, 0),
         TurnDirection.CLOCKWISE,
         started_at=0.0,
         duration_seconds=0.5,
     )
 
-    frame = _render_turn_frame(board, animation, angle_degrees=23.0, zoom=1.0)
+    frame = _render_turn_frame(
+        animation,
+        board.face_at(HexCoordinate(0, 0)),
+        angle_degrees=23.0,
+        zoom=1.0,
+    )
 
     assert frame.get_at((0, 0)).a == 0
     assert frame.get_at((frame.get_width() - 1, 0)).a == 0

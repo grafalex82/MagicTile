@@ -5,17 +5,18 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from magic_tile.domain import FaceColor, PeriodicBoard, TurnDirection
+from magic_tile.domain import Face, FaceColor, HexCoordinate, PeriodicBoard, TurnDirection
 
 
 @dataclass(slots=True)
 class TurnAnimation:
     """Colors and timing needed to display one atomic model permutation."""
 
-    face_color: FaceColor
+    face: Face
+    turning_faces: tuple[Face, ...]
     direction: TurnDirection
     started_at: float
-    source_colors: dict[tuple[FaceColor, str, int], FaceColor]
+    source_colors: dict[tuple[Face, str, int], FaceColor]
     duration_seconds: float
     render_cache: object | None = field(default=None, repr=False, compare=False)
     completion_frame_shown: bool = field(default=False, repr=False, compare=False)
@@ -24,20 +25,30 @@ class TurnAnimation:
     def begin(
         cls,
         board: PeriodicBoard,
-        face_color: FaceColor,
+        face_coordinate: HexCoordinate,
         direction: TurnDirection,
         started_at: float,
         duration_seconds: float,
     ) -> TurnAnimation:
         """Capture the old colors, then immediately update the exact model."""
-        source_colors: dict[tuple[FaceColor, str, int], FaceColor] = {}
-        for slot in board.affected_slots(face_color):
-            color, kind, index = slot
-            face = board.face_for_color(color)
-            values = face.edge_colors if kind == "edge" else face.corner_colors
+        face = board.face_at(face_coordinate)
+        turning_faces = board.turning_faces_at(face_coordinate)
+        source_colors: dict[tuple[Face, str, int], FaceColor] = {}
+        for slot in board.affected_slots(face_coordinate):
+            slot_face, kind, index = slot
+            values = (
+                slot_face.edge_colors if kind == "edge" else slot_face.corner_colors
+            )
             source_colors[slot] = values[index]
-        board.turn(face_color, direction)
-        return cls(face_color, direction, started_at, source_colors, duration_seconds)
+        board.turn(face_coordinate, direction)
+        return cls(
+            face,
+            turning_faces,
+            direction,
+            started_at,
+            source_colors,
+            duration_seconds,
+        )
 
     def progress(self, now: float) -> float:
         """Return linear elapsed progress clamped to the animation duration."""

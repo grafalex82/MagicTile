@@ -17,21 +17,26 @@ The player sees a finite viewport onto an infinite plane and can:
 - zoom in and out;
 - select any visible face for rotation.
 
-The infinite plane is virtual. There are seven unique logical color faces that
-repeat periodically across the plane. On-screen copies of the same logical face
-represent the same object.
+The infinite plane is virtual. The current configuration contains seven logical
+face objects that repeat periodically across coordinate-identified cells. A
+face itself has no coordinate: cells at different coordinates can resolve to the
+same in-memory object. The seven objects form a torus; following any fixed
+neighbor direction seven times returns to the starting face.
 
 ### Piece terminology
 
-- A face's fixed `color` identifies it; only its edge and corner color slots move.
+- A cell is identified by its axial coordinate and resolves to a face object.
+  The face's object identity distinguishes it from other logical faces.
+- A face's fixed center `color` is a visual attribute, just like its movable
+  edge and corner colors.
+- Every face stores six neighbor references in cyclic slot order. These links
+  are connected while the board is built and remain unchanged afterward.
 - An edge element is represented by one visible color slot on each of its two
   adjacent faces.
 - A corner element is represented by one visible color slot on each of its
   three adjacent faces.
 - A `Face` is the set visible around one center: one center, six edges, and six
   corners.
-- A `FaceNeighborhood` is only a geometric helper containing one focused face
-  and the six faces around it; it is not a puzzle element.
 
 ### Moves
 
@@ -40,8 +45,10 @@ area has a radius slightly larger than the hexagon and includes its pieces plus
 one outer ring of surrounding pieces.
 
 When a logical face appears in multiple on-screen locations, all of its copies
-animate simultaneously. Animation must not determine the move result: the model
-first applies an exact permutation, while the view only displays the transition.
+animate simultaneously. Faces sharing a center color also belong to the same
+turn group, while retaining independent coordinate identities and neighborhoods.
+Animation must not determine the move result: the model first applies an exact
+permutation, while the view only displays the transition.
 
 ### Objective
 
@@ -97,13 +104,14 @@ The following remain to be defined:
 
 ## Implemented move geometry
 
-Each logical face owns six visible edge-color slots and six visible
-corner-color slots in counterclockwise screen order. A 60-degree turn cycles
-all twelve selected-face slots. It also cycles the inward-facing edge and the
-two endpoint corners of each neighboring face to the corresponding slots on
-the next neighbor. This sticker-slot representation records orientation
-directly; there are no shared `Edge` or `Corner` object classes in the mutable
-model.
+Each logical face owns six visible edge-color slots and six visible corner-color
+slots in counterclockwise screen order. A 60-degree turn cycles all twelve
+selected-face slots. It also cycles the inward-facing edge and the two endpoint
+corners reached through the face's stored neighbor references. Mutable slot
+maps and animation snapshots are keyed by references to the owning face object,
+never by coordinate or color. This sticker-slot representation records
+orientation directly; there are no shared `Edge` or `Corner` object classes in
+the mutable model.
 
 Any visible periodic copy can be clicked, and all copies of its logical face
 animate together. The model permutation is committed atomically before the
@@ -149,18 +157,20 @@ not need to be reconstructed on every frame.
 
 ### Starting a turn
 
-`TurnAnimation.begin()` first uses `PeriodicBoard.affected_slots()` to capture
-the old colors of every slot that will move. It then immediately calls
-`PeriodicBoard.turn()`, committing the exact final permutation to the model.
+`TurnAnimation.begin()` receives the selected axial coordinate and first uses
+`PeriodicBoard.affected_slots()` to capture the old colors of every slot that
+will move. It then immediately calls `PeriodicBoard.turn()`, committing the
+exact final permutation to the model.
 The model has no intermediate animation state: the transition exists only in
 the view.
 
 The first animation frame creates a `_TurnRenderCache`. Its `background` is a
 complete static rendering of the board in the final model state, while
-`centers` contains the screen-pixel centers of every visible periodic copy of
-the turning logical face. The cache is keyed by window size, camera offset, and
-zoom. It is rebuilt after a resize, pan, or zoom; otherwise its background is
-restored before every frame so no pixels from the preceding frame remain.
+`centers` pairs each turning face reference with the screen-pixel center of
+every visible cell resolving to that object. The cache is keyed by window size,
+camera offset, and zoom. It is rebuilt after a resize, pan, or zoom; otherwise
+its background is restored before every frame so no pixels from the preceding
+frame remain.
 
 ### Animated turn disk
 
@@ -199,9 +209,10 @@ animated layer to disappear without a visual jump.
 After rasterization, a circular alpha mask removes every pixel outside the
 turn disk. At zoom levels below 100%, the disk is first rendered at 100% and
 then smoothly reduced to the exact target radius before the circular mask is
-reapplied. This keeps small-scale lines and curves stable. The same finished
-turn frame is centered on every point in `_TurnRenderCache.centers`, making all
-visible copies of one logical face animate synchronously.
+reapplied. This keeps small-scale lines and curves stable. A turn frame is
+produced from each face object's own stored neighborhood and centered on all
+matching entries in `_TurnRenderCache.centers`, making periodic copies and
+same-colored turn groups animate synchronously.
 
 The final layer order is:
 

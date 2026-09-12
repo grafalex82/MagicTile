@@ -12,6 +12,7 @@ import pygame.gfxdraw
 
 from magic_tile.domain import (
     BOARD,
+    Face,
     FaceColor,
     HexCoordinate,
     PeriodicBoard,
@@ -46,9 +47,8 @@ class _TurnRenderCache:
     """Screen-space data reused while one logical face is turning.
 
     One logical face occurs at several coordinates on the periodic board, so a
-    single rendered turn frame must be mapped to every visible occurrence of
-    ``animation.face_color``. ``centers`` stores those destination points, and
-    the same frame is blitted with its center aligned to each point.
+    each turning face is mapped to every visible coordinate resolving to that
+    object. ``centers`` stores the face reference with each destination.
 
     ``key`` maps the cached data to the viewport state in which it was created:
     ``(surface_size, camera_offset, zoom)``. A resize, pan, or zoom produces a
@@ -63,8 +63,8 @@ class _TurnRenderCache:
     key: tuple[tuple[int, int], tuple[float, float], float]
     # Static full-window image matching ``key``.
     background: pygame.Surface
-    # Screen-pixel centers of all visible copies of the turning logical face.
-    centers: tuple[tuple[int, int], ...]
+    # Logical face object and screen center for every animated occurrence.
+    centers: tuple[tuple[Face, tuple[int, int]], ...]
 
 
 @dataclass(slots=True)
@@ -171,13 +171,13 @@ def draw_board(
     # Keep the solid outline above the rotating layer. During a turn it follows
     # the selected logical face rather than the current cursor position.
     guide_radius = round(hex_height * TURN_GUIDE_DIAMETER_SCALE / 2)
-    highlighted_face = None
+    highlighted_faces = ()
     if animation is not None:
-        highlighted_face = board.face_for_color(animation.face_color)
+        highlighted_faces = animation.turning_faces
     elif hovered_coordinate is not None:
-        highlighted_face = board.face_at(hovered_coordinate)
+        highlighted_faces = (board.face_at(hovered_coordinate),)
 
-    if highlighted_face is not None:
+    if highlighted_faces:
         # pygame draws a circle's stroke inward from its nominal radius.
         # Place the highlight on the middle of that dividing stroke rather
         # than on its outer boundary.
@@ -186,7 +186,7 @@ def draw_board(
             + (TURN_GUIDE_HIGHLIGHT_WIDTH - 1) / 2
         )
         for q, r, center in visible:
-            if board.face_at(HexCoordinate(q, r)) is highlighted_face:
+            if board.face_at(HexCoordinate(q, r)) in highlighted_faces:
                 pygame.draw.circle(
                     surface,
                     TURN_GUIDE_HIGHLIGHT_COLOR,
@@ -203,18 +203,18 @@ def _draw_faces(
     hex_height: float,
     zoom: float,
     piece_width: int,
-    color_overrides: dict[tuple[FaceColor, str, int], FaceColor] | None = None,
+    color_overrides: dict[tuple[Face, str, int], FaceColor] | None = None,
 ) -> None:
     """Draw complete faces from circle-intersection piece geometry."""
     overrides = color_overrides or {}
     for q, r, center in visible:
         face = board.face_at(HexCoordinate(q, r))
         edge_colors = tuple(
-            overrides.get((face.color, "edge", index), color)
+            overrides.get((face, "edge", index), color)
             for index, color in enumerate(face.edge_colors)
         )
         corner_colors = tuple(
-            overrides.get((face.color, "corner", index), color)
+            overrides.get((face, "corner", index), color)
             for index, color in enumerate(face.corner_colors)
         )
         face_surface = _render_curved_face(
@@ -381,15 +381,19 @@ def _draw_turn_animation(
         animation.render_cache = cache
 
     render_zoom = max(1.0, zoom)
-    turn_frame = _render_turn_frame(
-        board,
-        animation,
-        animation.angle_degrees(now),
-        render_zoom,
-    )
     source_radius = _turn_circle_radius(render_zoom)
-    turn_frame = _scale_turn_frame(turn_frame, source_radius, radius)
-    for turn_center in cache.centers:
+    turn_frames: dict[Face, pygame.Surface] = {}
+    for face, turn_center in cache.centers:
+        turn_frame = turn_frames.get(face)
+        if turn_frame is None:
+            turn_frame = _render_turn_frame(
+                animation,
+                face,
+                animation.angle_degrees(now),
+                render_zoom,
+            )
+            turn_frame = _scale_turn_frame(turn_frame, source_radius, radius)
+            turn_frames[face] = turn_frame
         surface.blit(turn_frame, turn_frame.get_rect(center=turn_center))
 
 
@@ -401,17 +405,21 @@ def _prepare_turn_cache(
     cache_key: tuple[tuple[int, int], tuple[float, float], float],
 ) -> _TurnRenderCache:
     """Collect periodic target centers and retain the completed background."""
-    centers: list[tuple[int, int]] = []
+    turning_faces = set(animation.turning_faces)
+    centers: list[tuple[Face, tuple[int, int]]] = []
     for q, r, turn_center in visible:
-        if board.face_at(HexCoordinate(q, r)).color is not animation.face_color:
+        face = board.face_at(HexCoordinate(q, r))
+        if face not in turning_faces:
             continue
-        centers.append((round(turn_center[0]), round(turn_center[1])))
+        centers.append(
+            (face, (round(turn_center[0]), round(turn_center[1])))
+        )
     return _TurnRenderCache(cache_key, surface.copy(), tuple(centers))
 
 
 def _render_turn_frame(
-    board: PeriodicBoard,
     animation: TurnAnimation,
+    focus: Face,
     angle_degrees: float,
     zoom: float,
 ) -> pygame.Surface:
@@ -426,12 +434,7 @@ def _render_turn_frame(
     turn_center = (size // 2, size // 2)
     rendered = pygame.Surface((size, size), pygame.SRCALPHA)
 
-    palette = tuple(FaceColor)
-    focus_coordinate = HexCoordinate(palette.index(animation.face_color), 0)
-    coordinates = (focus_coordinate,) + tuple(
-        HexCoordinate(focus_coordinate.q + dq, focus_coordinate.r + dr)
-        for dq, dr in board.NEIGHBOUR_DIRECTIONS
-    )
+    faces = (focus,) + focus.neighbors
     angle = math.radians(angle_degrees)
     cosine = math.cos(angle)
     sine = math.sin(angle)
@@ -452,19 +455,18 @@ def _render_turn_frame(
             ),
         )
 
-    for coordinate, cell in zip(coordinates, cells):
-        face = board.face_at(coordinate)
+    for face, cell in zip(faces, cells):
         vertices = tuple(rotated_point(point) for point in cell.vertices)
 
         edge_colors = tuple(
             animation.source_colors.get(
-                (face.color, "edge", index), color
+                (face, "edge", index), color
             )
             for index, color in enumerate(face.edge_colors)
         )
         corner_colors = tuple(
             animation.source_colors.get(
-                (face.color, "corner", index), color
+                (face, "corner", index), color
             )
             for index, color in enumerate(face.corner_colors)
         )
@@ -759,7 +761,7 @@ def run(settings: Settings) -> int:
                         height=HEX_HEIGHT * camera.zoom,
                         offset=camera.offset,
                     )
-                    face_color = board.face_at(HexCoordinate(q, r)).color
+                    face_coordinate = HexCoordinate(q, r)
                     direction = (
                         TurnDirection.COUNTERCLOCKWISE
                         if event.button == 1
@@ -767,7 +769,7 @@ def run(settings: Settings) -> int:
                     )
                     animation = TurnAnimation.begin(
                         board,
-                        face_color,
+                        face_coordinate,
                         direction,
                         now,
                         duration_seconds=settings.turn_animation_duration_seconds,

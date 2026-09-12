@@ -8,10 +8,12 @@ from magic_tile.domain import (
 )
 
 
-def test_board_has_seven_faces_identified_by_center_color() -> None:
+def test_coordinates_resolve_to_seven_coordinate_free_face_objects() -> None:
     board = PeriodicBoard()
 
     assert len(board.faces) == 7
+    assert all(not hasattr(face, "coordinate") for face in board.faces)
+    assert board.face_at(HexCoordinate(0, 0)) is board.face_at(HexCoordinate(7, 0))
     assert {face.color for face in board.faces} == set(FaceColor)
 
 
@@ -27,10 +29,10 @@ def test_each_face_contains_six_edges_and_six_corners() -> None:
 
 def test_center_and_ring_contain_each_color_once() -> None:
     board = PeriodicBoard()
-    neighborhood = board.neighborhood_at(HexCoordinate(0, 0))
+    focus = board.face_at(HexCoordinate(0, 0))
 
-    colors = [neighborhood.focus.color]
-    colors.extend(face.color for face in neighborhood.neighbors)
+    colors = [focus.color]
+    colors.extend(face.color for face in focus.neighbors)
 
     assert len(set(colors)) == 7
     assert set(colors) == set(FaceColor)
@@ -62,28 +64,85 @@ def test_faces_repeat_across_the_plane() -> None:
     assert board.face_at(HexCoordinate(coordinate.q + 3, coordinate.r - 1)) is original
 
 
-def test_turn_moves_neighbor_stickers_in_requested_direction() -> None:
+def test_faces_hold_their_six_neighbor_references() -> None:
     board = PeriodicBoard()
-    focus_color = FaceColor.WHITE
-    neighbor_colors = tuple(
-        face.color
-        for face in board.neighborhood_at(HexCoordinate(0, 0)).neighbors
+
+    for index, face in enumerate(board.faces):
+        representative = HexCoordinate(index, 0)
+        expected = tuple(
+            board.face_at(representative.translated(dq, dr))
+            for dq, dr in board.NEIGHBOUR_DIRECTIONS
+        )
+        assert face.neighbors == expected
+
+
+def test_each_direction_wraps_around_the_seven_face_torus() -> None:
+    board = PeriodicBoard()
+
+    for direction_index in range(6):
+        start = board.face_at(HexCoordinate(0, 0))
+        current = start
+        visited = set()
+        for _ in range(7):
+            visited.add(current)
+            current = current.neighbors[direction_index]
+
+        assert current is start
+        assert len(visited) == 7
+
+
+def test_affected_slots_are_addressed_by_face_references() -> None:
+    board = PeriodicBoard()
+    focus = board.face_at(HexCoordinate(0, 0))
+
+    slots = board.affected_slots(HexCoordinate(0, 0))
+
+    assert len(slots) == 30
+    assert all(face in board.faces for face, _, _ in slots)
+    assert (focus, "edge", 0) in slots
+    assert (focus.neighbors[0], "edge", 3) in slots
+
+
+def test_turn_uses_face_neighbor_references_after_center_colors_are_swapped() -> None:
+    board = PeriodicBoard()
+    focus = board.face_at(HexCoordinate(0, 0))
+    other = board.face_at(HexCoordinate(2, 0))
+    focus.color, other.color = other.color, focus.color
+    source_edges = tuple(
+        neighbor.edge_colors[(index + 3) % 6]
+        for index, neighbor in enumerate(focus.neighbors)
     )
 
-    board.turn(focus_color, TurnDirection.COUNTERCLOCKWISE)
+    board.turn(HexCoordinate(0, 0), TurnDirection.COUNTERCLOCKWISE)
 
-    for destination_index, destination_color in enumerate(neighbor_colors):
-        source_color = neighbor_colors[(destination_index - 1) % 6]
+    for destination_index, destination_face in enumerate(focus.neighbors):
         inward_edge = (destination_index + 3) % 6
-        assert board.face_for_color(destination_color).edge_colors[inward_edge] is source_color
+        assert (
+            destination_face.edge_colors[inward_edge]
+            is source_edges[(destination_index - 1) % 6]
+        )
+
+
+def test_turn_moves_neighbor_stickers_in_requested_direction() -> None:
+    board = PeriodicBoard()
+    focus_coordinate = HexCoordinate(0, 0)
+    neighbors = board.face_at(focus_coordinate).neighbors
+
+    board.turn(focus_coordinate, TurnDirection.COUNTERCLOCKWISE)
+
+    for destination_index, destination_face in enumerate(neighbors):
+        source_color = neighbors[(destination_index - 1) % 6].color
+        inward_edge = (destination_index + 3) % 6
+        assert destination_face.edge_colors[inward_edge] is source_color
 
 
 def test_turn_followed_by_inverse_restores_every_sticker() -> None:
     board = PeriodicBoard()
     original = board.sticker_state()
 
-    board.turn(FaceColor.RED, TurnDirection.CLOCKWISE)
-    board.turn(FaceColor.RED, TurnDirection.COUNTERCLOCKWISE)
+    coordinate = HexCoordinate(2, 0)
+    board.turn(coordinate, TurnDirection.CLOCKWISE)
+    board.turn(coordinate, TurnDirection.COUNTERCLOCKWISE)
 
     assert board.sticker_state() == original
 
@@ -93,7 +152,7 @@ def test_six_turns_restore_every_sticker() -> None:
     original = board.sticker_state()
 
     for _ in range(6):
-        board.turn(FaceColor.CYAN, TurnDirection.CLOCKWISE)
+        board.turn(HexCoordinate(1, 0), TurnDirection.CLOCKWISE)
 
     assert board.sticker_state() == original
 
@@ -106,12 +165,12 @@ def test_turns_preserve_all_sticker_colors() -> None:
 
     original_counts = color_counts()
     moves = (
-        (FaceColor.WHITE, TurnDirection.COUNTERCLOCKWISE),
-        (FaceColor.BLUE, TurnDirection.CLOCKWISE),
-        (FaceColor.ORANGE, TurnDirection.COUNTERCLOCKWISE),
-        (FaceColor.WHITE, TurnDirection.CLOCKWISE),
+        (HexCoordinate(0, 0), TurnDirection.COUNTERCLOCKWISE),
+        (HexCoordinate(4, 0), TurnDirection.CLOCKWISE),
+        (HexCoordinate(3, 0), TurnDirection.COUNTERCLOCKWISE),
+        (HexCoordinate(0, 0), TurnDirection.CLOCKWISE),
     )
-    for color, direction in moves:
-        board.turn(color, direction)
+    for coordinate, direction in moves:
+        board.turn(coordinate, direction)
 
     assert color_counts() == original_counts

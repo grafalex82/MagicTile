@@ -11,8 +11,8 @@ and the remaining game flow are still planned.
 
 ## Core concept
 
-- The board appears infinite but is logically composed of seven periodically
-  repeated color faces.
+- The board appears infinite but is currently backed by seven logical face
+  objects repeated across coordinate-identified cells.
 - Hexagons tile the plane without gaps: adjacent faces share an edge, and three
   faces meet at every vertex.
 - A turn affects the selected hexagon's pieces and one surrounding outer ring.
@@ -43,9 +43,11 @@ MagicTile/
 └── tests/                   # Automated tests
 ```
 
-The domain model stores the visible orientation as six edge-color slots and six
-corner-color slots per logical face. This lets moves preserve orientation even
-when a physical piece later returns to a former position.
+Each logical face has a center color, six edge-color slots, six corner-color
+slots, and six permanent neighbor references. A face does not own a coordinate:
+multiple cells in the repeating plane may resolve to the same object. Colors are
+visual attributes rather than identifiers. This lets future board configurations
+contain repeated colors with different local neighborhoods.
 
 ## Requirements
 
