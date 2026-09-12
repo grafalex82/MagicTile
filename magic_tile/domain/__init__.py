@@ -2,24 +2,20 @@
 
 from magic_tile.domain.board import (
     BOARD,
-    Center,
-    Corner,
-    Edge,
     Face,
     FaceColor,
     FaceNeighborhood,
     HexCoordinate,
     PeriodicBoard,
+    TurnDirection,
 )
 
 __all__ = (
     "BOARD",
-    "Center",
-    "Corner",
-    "Edge",
     "Face",
     "FaceColor",
     "FaceNeighborhood",
     "HexCoordinate",
     "PeriodicBoard",
+    "TurnDirection",
 )

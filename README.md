@@ -5,9 +5,9 @@ hexagonal faces. Its core idea is similar to a Rubik's Cube: the player rotates
 a selected face together with a surrounding ring of pieces and tries to return
 every face to a single color.
 
-The project is at an early stage. The concept and repository structure are now
-defined, while the exact piece geometry and move rules still need to be
-formalized.
+The project is at an early stage. The periodic board, sticker model, mouse
+turns, and exact 60-degree move permutation are implemented; macros, saving,
+and the remaining game flow are still planned.
 
 ## Core concept
 
@@ -43,9 +43,9 @@ MagicTile/
 └── tests/                   # Automated tests
 ```
 
-The module directories currently define the intended architectural boundaries.
-The game rules will not be implemented until the geometry and move permutations
-have been clarified.
+The domain model stores the visible orientation as six edge-color slots and six
+corner-color slots per logical face. This lets moves preserve orientation even
+when a physical piece later returns to a former position.
 
 ## Requirements
 
@@ -70,11 +70,12 @@ Install or update the dependencies when needed:
 python -m pip install -r requirements.txt
 ```
 
-The current prototype displays a resizable pygame window with a periodically
-coloured flat-top hexagonal grid. Every hexagon is 200 pixels high. Drag with
-the left or middle mouse button to pan the infinite board in any direction.
-Scroll the mouse wheel up to zoom in or down to zoom out; zoom is limited to
-50% through 250%. Press Escape or close the window to exit.
+The prototype displays a resizable pygame window with a periodically coloured
+flat-top hexagonal grid. Every hexagon is 200 pixels high. Left-click a face to
+turn every copy of that logical face counterclockwise; right-click to turn it
+clockwise. A turn lasts 0.5 seconds and locks other board controls. Drag with
+the middle mouse button to pan. Scroll up to zoom in or down to zoom out; zoom
+is limited to 50% through 250%. Press Escape or close the window to exit.
 
 ## Tests
 
