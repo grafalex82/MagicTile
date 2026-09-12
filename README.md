@@ -6,8 +6,9 @@ a selected face together with a surrounding ring of pieces and tries to return
 every face to a single color.
 
 The project is at an early stage. The periodic board, sticker model, mouse
-turns, and exact 60-degree move permutation are implemented; macros, saving,
-and the remaining game flow are still planned.
+turns, exact 60-degree move permutation, undo/redo, and face-relative macros
+are implemented; saving the puzzle state and the remaining game flow are still
+planned.
 
 ## Core concept
 
@@ -20,8 +21,7 @@ and the remaining game flow are still planned.
 - The player can pan and zoom the camera.
 - A left click turns a face counterclockwise; a right click turns it clockwise.
   Keyboard controls will also be available.
-- Planned features include macros, setup moves, and reverse playback of setup
-  sequences.
+- Planned features include setup moves and reverse playback of setup sequences.
 - The game state can be saved and restored between sessions.
 
 See the [design document](docs/DESIGN.md) for details and unresolved questions,
@@ -80,17 +80,45 @@ controls. Drag with
 the left mouse button more than 5 pixels on either axis to pan. Releasing it
 within that threshold turns the face. Scroll up to zoom in or down to zoom out;
 zoom is limited to 50% through 250%. Use Ctrl+Z to undo and Ctrl+Y (or
-Ctrl+Shift+Z) to redo; both play the normal turn animation. Press Escape or
-close the window to exit.
+Ctrl+Shift+Z) to redo; both play the normal turn animation. Close the window
+(for example with Alt+F4 on Windows) to exit.
 
-On startup, the game loads `settings.json` from the current directory. If the
-file does not exist, it creates one with the default settings. The currently
-supported option is `turn_animation_duration_seconds`, which defaults to 0.5
-seconds:
+Up to ten face-relative macros can be stored in slots 0 through 9:
+
+- Press Ctrl+0 through Ctrl+9 to start recording into that slot. Normal mouse
+  turns are animated and added to the recording. Each newly used logical face
+  receives a green ring and a one-based number.
+- Press Enter to save the recording or Escape to cancel it and animate all of
+  its moves backward. Escape does not close the application.
+- Undo and redo remain available while recording: they remove and restore
+  moves in both the shared game history and the macro being recorded.
+- Hold Shift and left-click logical faces in the desired order. Press a digit
+  to play that slot, or Shift+digit to play its inverse. Playback always runs
+  to completion.
+- Escape clears the selected faces. An ordinary face turn clears them as well;
+  completed macro playback keeps them selected for another run.
+
+Macro slots are kept in `settings.json` using readable relative moves. A number
+identifies a selected face, an apostrophe means counterclockwise, and moves may
+be separated by hyphens or spaces. For example:
 
 ```json
 {
-  "turn_animation_duration_seconds": 0.5
+  "turn_animation_duration_seconds": 0.5,
+  "macros": {
+    "0": "1-2'-1'-2"
+  }
+}
+```
+
+On startup, the game loads `settings.json` from the current directory. If the
+file does not exist, it creates one with the default settings. The animation
+duration defaults to 0.5 seconds, and absent macro slots are empty:
+
+```json
+{
+  "turn_animation_duration_seconds": 0.5,
+  "macros": {}
 }
 ```
 

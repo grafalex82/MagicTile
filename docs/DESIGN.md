@@ -61,7 +61,7 @@ face consists entirely of pieces of its own color.
   within 5 pixels on both axes; drag it farther to pan the camera.
 - Right mouse button: rotate the selected face clockwise.
 - Keyboard: alternative face selection and rotation controls.
-- Macros: bind repeatable move sequences to keyboard shortcuts.
+- Macros: record face-relative move sequences in ten persistent keyboard slots.
 - Setup moves: record a preparation sequence and later undo that sequence in
   reverse order.
 
@@ -95,12 +95,30 @@ The following remain to be defined:
 2. How is a face's keyboard identifier selected?
 3. What are the scrambling rules: number of moves, immediate inverse moves,
    and random-number seed behavior?
-4. How do macros work: live recording or an editor, nesting, length limits, and
-   persistence between sessions?
-5. What are the setup-move semantics: one stack or multiple named stacks, and
+4. What are the setup-move semantics: one stack or multiple named stacks, and
    what happens when ordinary moves occur between setup and undo?
-6. Are multiple save slots, autosaving, and portable save files required?
-7. Which items and game modes belong in the main menu?
+5. Are multiple save slots, autosaving, and portable save files required?
+6. Which items and game modes belong in the main menu?
+
+## Macros
+
+Ctrl plus a digit begins live recording in that slot. Turns continue to update
+the model and use the normal animation. Logical faces receive relative numbers
+in first-use order, so a recorded sequence can later be applied to a different
+ordered selection of faces. Enter saves the macro to the settings file; Escape
+cancels it, restores the previous undo/redo branches, and animates the inverse
+sequence.
+
+Recording and ordinary play use the same linear undo/redo history and cursor.
+Undo cannot cross the point where recording began; it removes the last active
+move from both the board and the macro. Redo restores that move to both. This
+keeps the recorded sequence identical to the active history segment.
+
+Shift plus a left click builds an ordered selection of unique logical faces.
+A digit plays its macro and Shift plus that digit plays the reversed sequence
+with inverted directions. Playback is non-interruptible, keeps its selection,
+and rejects selections whose size differs from the macro's required face
+count. Escape clears a selection but never exits the application.
 
 ## Implemented move geometry
 

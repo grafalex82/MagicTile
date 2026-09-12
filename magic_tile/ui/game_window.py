@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import time
+from collections import deque
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -18,8 +19,14 @@ from magic_tile.domain import (
     PeriodicBoard,
     TurnDirection,
 )
-from magic_tile.input import TurnCommand, TurnHistory
-from magic_tile.persistence import Settings
+from magic_tile.input import (
+    MacroRecording,
+    MacroSelection,
+    TurnCommand,
+    TurnHistory,
+    TurnHistorySnapshot,
+)
+from magic_tile.persistence import Settings, save_settings
 from magic_tile.ui.camera import Camera
 from magic_tile.ui.hex_grid import (
     HEX_HEIGHT,
@@ -39,6 +46,12 @@ GRID_WIDTH = 10
 PIECE_GRID_WIDTH = 3
 TURN_GUIDE_HIGHLIGHT_COLOR = pygame.Color("#ff4040")
 TURN_GUIDE_HIGHLIGHT_WIDTH = 2
+MACRO_HIGHLIGHT_COLOR = pygame.Color("#37e46f")
+MACRO_HIGHLIGHT_WIDTH = 3
+PANEL_BACKGROUND = pygame.Color(15, 15, 18, 220)
+PANEL_TEXT = pygame.Color("#ffffff")
+ERROR_BACKGROUND = pygame.Color(150, 28, 28, 235)
+INFO_BACKGROUND = pygame.Color(24, 92, 48, 235)
 # The hover indicator reaches beyond every corner and into the moving ring.
 TURN_GUIDE_DIAMETER_SCALE = 1.55
 # A left-button movement must pass this distance on either screen axis before
@@ -77,6 +90,14 @@ class _TurnRenderCache:
     background: pygame.Surface
     # Logical face object and screen center for every animated occurrence.
     centers: tuple[tuple[Face, tuple[int, int]], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _QueuedTurn:
+    """One animation waiting to play, with its history policy."""
+
+    command: TurnCommand
+    record_history: bool
 
 
 @dataclass(slots=True)
@@ -147,6 +168,11 @@ def draw_board(
     hovered_coordinate: HexCoordinate | None = None,
     animation: TurnAnimation | None = None,
     now: float | None = None,
+    macro_face_numbers: dict[Face, int] | None = None,
+    recording_slot: int | None = None,
+    recording_move_count: int = 0,
+    status_message: str | None = None,
+    status_is_error: bool = False,
 ) -> None:
     """Draw the board using colours supplied by the domain model."""
     # Clear the previous frame before drawing the current board state.
@@ -181,6 +207,9 @@ def draw_board(
     # Keep the solid outline above the rotating layer. During a turn it follows
     # the selected logical face rather than the current cursor position.
     guide_radius = round(hex_height * TURN_GUIDE_DIAMETER_SCALE / 2)
+    if macro_face_numbers:
+        _draw_macro_face_markers(surface, board, visible, guide_radius, macro_face_numbers, zoom)
+
     highlighted_faces = ()
     if animation is not None:
         highlighted_faces = animation.turning_faces
@@ -201,6 +230,106 @@ def draw_board(
                     highlight_radius,
                     width=TURN_GUIDE_HIGHLIGHT_WIDTH,
                 )
+
+    if recording_slot is not None:
+        _draw_recording_panel(surface, recording_slot, recording_move_count, len(macro_face_numbers or {}))
+    if status_message is not None:
+        _draw_status_message(surface, status_message, status_is_error)
+
+
+def _draw_macro_face_markers(
+    surface: pygame.Surface,
+    board: PeriodicBoard,
+    visible: list[tuple[int, int, tuple[float, float]]],
+    guide_radius: int,
+    face_numbers: dict[Face, int],
+    zoom: float,
+) -> None:
+    """Draw green rings and ordinal labels on every visible logical-face copy."""
+    font = _ui_font(max(22, round(42 * zoom)), bold=True)
+    label_radius = max(15, round(24 * zoom))
+    ring_radius = round(guide_radius + (MACRO_HIGHLIGHT_WIDTH - 1) / 2)
+    for q, r, center in visible:
+        face_number = face_numbers.get(board.face_at(HexCoordinate(q, r)))
+        if face_number is None:
+            continue
+        pixel_center = round(center[0]), round(center[1])
+        pygame.draw.circle(
+            surface,
+            MACRO_HIGHLIGHT_COLOR,
+            pixel_center,
+            ring_radius,
+            width=MACRO_HIGHLIGHT_WIDTH,
+        )
+        pygame.draw.circle(surface, PANEL_BACKGROUND, pixel_center, label_radius)
+        label = font.render(str(face_number), True, MACRO_HIGHLIGHT_COLOR)
+        surface.blit(label, label.get_rect(center=pixel_center))
+
+
+def _draw_recording_panel(surface: pygame.Surface, slot: int, move_count: int, face_count: int) -> None:
+    """Draw an always-visible recording indicator and its controls."""
+    title_font = _ui_font(28, bold=True)
+    detail_font = _ui_font(21)
+    title = title_font.render(f"RECORDING MACRO {slot}", True, PANEL_TEXT)
+    detail = detail_font.render(
+        f"Moves: {move_count}   Faces: {face_count}   Enter: save   Esc: cancel",
+        True,
+        PANEL_TEXT,
+    )
+    width = max(title.get_width(), detail.get_width()) + 52
+    panel = pygame.Surface((width, 82), pygame.SRCALPHA)
+    panel.fill(PANEL_BACKGROUND)
+    pygame.draw.circle(panel, pygame.Color("#ff3b30"), (22, 24), 8)
+    panel.blit(title, (38, 10))
+    panel.blit(detail, (16, 48))
+    surface.blit(panel, (16, 16))
+
+
+def _draw_status_message(surface: pygame.Surface, message: str, is_error: bool) -> None:
+    """Draw a short non-modal result or error message at the bottom center."""
+    font = _ui_font(24, bold=True)
+    label = font.render(message, True, PANEL_TEXT)
+    panel = pygame.Surface((label.get_width() + 32, label.get_height() + 20), pygame.SRCALPHA)
+    panel.fill(ERROR_BACKGROUND if is_error else INFO_BACKGROUND)
+    panel.blit(label, (16, 10))
+    surface.blit(panel, panel.get_rect(midbottom=(surface.get_width() // 2, surface.get_height() - 18)))
+
+
+@lru_cache(maxsize=16)
+def _ui_font(size: int, bold: bool = False) -> pygame.font.Font:
+    """Return a readable cross-platform UI font."""
+    if not pygame.font.get_init():
+        pygame.font.init()
+    return pygame.font.SysFont("arial", size, bold=bold)
+
+
+def _digit_from_key(key: int) -> int | None:
+    """Map number-row and keypad keys to a macro slot."""
+    number_row = {
+        pygame.K_0: 0,
+        pygame.K_1: 1,
+        pygame.K_2: 2,
+        pygame.K_3: 3,
+        pygame.K_4: 4,
+        pygame.K_5: 5,
+        pygame.K_6: 6,
+        pygame.K_7: 7,
+        pygame.K_8: 8,
+        pygame.K_9: 9,
+    }
+    keypad = {
+        pygame.K_KP0: 0,
+        pygame.K_KP1: 1,
+        pygame.K_KP2: 2,
+        pygame.K_KP3: 3,
+        pygame.K_KP4: 4,
+        pygame.K_KP5: 5,
+        pygame.K_KP6: 6,
+        pygame.K_KP7: 7,
+        pygame.K_KP8: 8,
+        pygame.K_KP9: 9,
+    }
+    return number_row.get(key, keypad.get(key))
 
 
 def _draw_faces(
@@ -695,6 +824,7 @@ def _circular_alpha_mask(radius: int, padding: int = 3) -> pygame.Surface:
 def run(settings: Settings) -> int:
     """Open the main window and run its event/render loop using *settings*."""
     pygame.init()
+    _ui_font.cache_clear()
     try:
         screen = pygame.display.set_mode(WINDOW_SIZE, pygame.RESIZABLE)
         pygame.display.set_caption(WINDOW_TITLE)
@@ -702,14 +832,25 @@ def run(settings: Settings) -> int:
         camera = Camera()
         board = PeriodicBoard()
         turn_history = TurnHistory()
+        macro_selection = MacroSelection()
+        macro_recording: MacroRecording | None = None
+        recording_history: TurnHistorySnapshot | None = None
+        turn_queue: deque[_QueuedTurn] = deque()
+        playback_active = False
         panning = False
         left_button_down_at: tuple[int, int] | None = None
+        left_button_selecting = False
         animation: TurnAnimation | None = None
+        status_message: str | None = None
+        status_is_error = False
+        status_until = 0.0
         mouse_inside = pygame.mouse.get_focused()
         running = True
 
         while running:
             now = time.monotonic()
+            if status_message is not None and now >= status_until:
+                status_message = None
             if animation is not None and animation.is_finished(now):
                 if animation.completion_frame_shown:
                     animation = None
@@ -717,6 +858,21 @@ def run(settings: Settings) -> int:
                     # Keep one clamped 60-degree frame before switching to
                     # the separately rasterized final model.
                     animation.completion_frame_shown = True
+
+            if animation is None:
+                if turn_queue:
+                    queued_turn = turn_queue.popleft()
+                    if queued_turn.record_history:
+                        turn_history.record(queued_turn.command)
+                    animation = TurnAnimation.begin(
+                        board,
+                        queued_turn.command.coordinate,
+                        queued_turn.command.direction,
+                        now,
+                        duration_seconds=settings.turn_animation_duration_seconds,
+                    )
+                elif playback_active:
+                    playback_active = False
 
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -726,23 +882,114 @@ def run(settings: Settings) -> int:
                 elif event.type == pygame.WINDOWENTER:
                     mouse_inside = True
                 elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                    running = False
-                elif animation is not None:
-                    # Quit and Escape remain available, but puzzle/camera input
-                    # is locked until the half-second turn finishes.
+                    if playback_active:
+                        continue
+                    if macro_recording is not None:
+                        turn_queue.extend(
+                            _QueuedTurn(command, record_history=False)
+                            for command in macro_recording.rollback_commands
+                        )
+                        if recording_history is None:
+                            raise RuntimeError("macro recording has no history snapshot")
+                        turn_history.restore(recording_history)
+                        macro_recording = None
+                        recording_history = None
+                        macro_selection.clear()
+                        playback_active = bool(turn_queue)
+                        status_message = "Macro recording canceled"
+                        status_is_error = False
+                        status_until = now + 3.0
+                    elif macro_selection:
+                        macro_selection.clear()
+                        status_message = None
+                    continue
+                elif (
+                    event.type == pygame.KEYDOWN
+                    and event.key in (pygame.K_RETURN, pygame.K_KP_ENTER)
+                    and macro_recording is not None
+                ):
+                    try:
+                        macro = macro_recording.macro
+                    except ValueError:
+                        status_message = "Cannot save an empty macro"
+                        status_is_error = True
+                        status_until = now + 3.0
+                        continue
+                    new_settings = settings.with_macro(macro_recording.slot, macro)
+                    try:
+                        save_settings(new_settings)
+                    except OSError as error:
+                        status_message = f"Could not save macro: {error}"
+                        status_is_error = True
+                        status_until = now + 5.0
+                        continue
+                    saved_slot = macro_recording.slot
+                    settings = new_settings
+                    macro_recording = None
+                    recording_history = None
+                    status_message = f"Macro {saved_slot} saved"
+                    status_is_error = False
+                    status_until = now + 3.0
+                    continue
+                elif animation is not None or playback_active:
+                    # A turn is atomic, and macro playback cannot be interrupted.
                     continue
                 elif event.type == pygame.KEYDOWN:
                     shortcut_modifiers = pygame.KMOD_CTRL | pygame.KMOD_META
                     has_undo_modifier = bool(event.mod & shortcut_modifiers)
+                    digit = _digit_from_key(event.key)
                     command: TurnCommand | None = None
-                    if has_undo_modifier and event.key == pygame.K_z:
+                    if digit is not None and event.mod & pygame.KMOD_CTRL:
+                        if macro_recording is None:
+                            macro_selection.clear()
+                            macro_recording = MacroRecording(digit)
+                            recording_history = turn_history.snapshot()
+                            status_message = None
+                        else:
+                            status_message = "Finish the current recording first"
+                            status_is_error = True
+                            status_until = now + 3.0
+                    elif digit is not None:
+                        if macro_recording is not None:
+                            continue
+                        macro = settings.macros[digit]
+                        if macro is None:
+                            continue
+                        try:
+                            commands = macro.commands(
+                                macro_selection.coordinates,
+                                reverse=bool(event.mod & pygame.KMOD_SHIFT),
+                            )
+                        except ValueError:
+                            status_message = (
+                                f"Macro {digit} requires {macro.required_face_count} faces; "
+                                f"selected {len(macro_selection.coordinates)}"
+                            )
+                            status_is_error = True
+                            status_until = now + 3.0
+                            continue
+                        turn_queue.extend(_QueuedTurn(item, record_history=True) for item in commands)
+                        playback_active = True
+                        status_message = None
+                    elif has_undo_modifier and event.key == pygame.K_z:
                         if event.mod & pygame.KMOD_SHIFT:
                             command = turn_history.redo()
                         else:
-                            command = turn_history.undo()
+                            minimum_position = (
+                                recording_history.position if recording_history is not None else 0
+                            )
+                            command = turn_history.undo(minimum_position)
                     elif has_undo_modifier and event.key == pygame.K_y:
                         command = turn_history.redo()
                     if command is not None:
+                        macro_selection.clear()
+                        if macro_recording is not None:
+                            if recording_history is None:
+                                raise RuntimeError("macro recording has no history snapshot")
+                            macro_recording.synchronize(
+                                board,
+                                turn_history.commands_since(recording_history.position),
+                            )
                         animation = TurnAnimation.begin(
                             board,
                             command.coordinate,
@@ -752,6 +999,9 @@ def run(settings: Settings) -> int:
                         )
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     left_button_down_at = event.pos
+                    left_button_selecting = macro_recording is None and bool(
+                        pygame.key.get_mods() & pygame.KMOD_SHIFT
+                    )
                     panning = False
                 elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                     if left_button_down_at is not None and not panning:
@@ -760,16 +1010,29 @@ def run(settings: Settings) -> int:
                             height=HEX_HEIGHT * camera.zoom,
                             offset=camera.offset,
                         )
-                        command = TurnCommand(HexCoordinate(q, r), TurnDirection.COUNTERCLOCKWISE)
-                        turn_history.record(command)
-                        animation = TurnAnimation.begin(
-                            board,
-                            command.coordinate,
-                            command.direction,
-                            now,
-                            duration_seconds=settings.turn_animation_duration_seconds,
-                        )
+                        coordinate = HexCoordinate(q, r)
+                        if left_button_selecting and macro_recording is None:
+                            macro_selection.add(board, coordinate)
+                        else:
+                            macro_selection.clear()
+                            command = TurnCommand(coordinate, TurnDirection.COUNTERCLOCKWISE)
+                            turn_history.record(command)
+                            if macro_recording is not None:
+                                if recording_history is None:
+                                    raise RuntimeError("macro recording has no history snapshot")
+                                macro_recording.synchronize(
+                                    board,
+                                    turn_history.commands_since(recording_history.position),
+                                )
+                            animation = TurnAnimation.begin(
+                                board,
+                                command.coordinate,
+                                command.direction,
+                                now,
+                                duration_seconds=settings.turn_animation_duration_seconds,
+                            )
                     left_button_down_at = None
+                    left_button_selecting = False
                     panning = False
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
                     q, r = hex_at_point(
@@ -778,7 +1041,15 @@ def run(settings: Settings) -> int:
                         offset=camera.offset,
                     )
                     command = TurnCommand(HexCoordinate(q, r), TurnDirection.CLOCKWISE)
+                    macro_selection.clear()
                     turn_history.record(command)
+                    if macro_recording is not None:
+                        if recording_history is None:
+                            raise RuntimeError("macro recording has no history snapshot")
+                        macro_recording.synchronize(
+                            board,
+                            turn_history.commands_since(recording_history.position),
+                        )
                     animation = TurnAnimation.begin(
                         board,
                         command.coordinate,
@@ -811,6 +1082,15 @@ def run(settings: Settings) -> int:
                 hovered_coordinate=hovered_coordinate,
                 animation=animation,
                 now=now,
+                macro_face_numbers=(
+                    macro_recording.face_numbers
+                    if macro_recording is not None
+                    else macro_selection.face_numbers
+                ),
+                recording_slot=macro_recording.slot if macro_recording is not None else None,
+                recording_move_count=macro_recording.move_count if macro_recording is not None else 0,
+                status_message=status_message,
+                status_is_error=status_is_error,
             )
             pygame.display.flip()
             clock.tick(60)
