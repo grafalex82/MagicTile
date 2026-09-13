@@ -1,5 +1,7 @@
 from collections import Counter
 
+import pytest
+
 from magic_tile.domain import (
     FaceColor,
     HexCoordinate,
@@ -180,3 +182,23 @@ def test_reset_restores_solved_state() -> None:
     board.reset()
 
     assert board.is_solved()
+
+
+def test_sticker_state_can_be_restored() -> None:
+    board = PeriodicBoard()
+    original = board.sticker_state()
+    board.turn(HexCoordinate(0, 0), TurnDirection.CLOCKWISE)
+
+    board.restore_sticker_state(original)
+
+    assert board.sticker_state() == original
+
+
+def test_invalid_sticker_state_is_rejected_without_changing_board() -> None:
+    board = PeriodicBoard()
+    original = board.sticker_state()
+
+    with pytest.raises(ValueError):
+        board.restore_sticker_state(original[:-1])
+
+    assert board.sticker_state() == original

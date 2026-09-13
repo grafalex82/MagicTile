@@ -6,9 +6,8 @@ a selected face together with a surrounding ring of pieces and tries to return
 every face to a single color.
 
 The project is at an early stage. The periodic board, sticker model, mouse
-turns, exact 60-degree move permutation, undo/redo, and face-relative macros
-are implemented; saving the puzzle state and the remaining game flow are still
-planned.
+turns, exact 60-degree move permutation, undo/redo, face-relative macros, and
+portable game saves are implemented; the remaining game flow is still planned.
 
 ## Core concept
 
@@ -121,6 +120,11 @@ duration defaults to 0.5 seconds, and absent macro slots are empty:
   "macros": {}
 }
 ```
+
+Use **File → Save** (Ctrl+S) or **File → Save As** to write the current board,
+active-game flag, and used-move count to a versioned JSON file. Use
+**File → Open** (Ctrl+O) to restore that file later. Loading a game clears the
+previous session's undo/redo history and any transient animation or macro state.
 
 ## Tests
 

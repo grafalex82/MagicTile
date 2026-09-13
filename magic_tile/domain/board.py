@@ -256,5 +256,18 @@ class PeriodicBoard:
         """Return a stable snapshot in face-configuration order."""
         return tuple(face.edge_colors + face.corner_colors for face in self._faces)
 
+    def restore_sticker_state(self, state: tuple[tuple[FaceColor, ...], ...]) -> None:
+        """Replace every movable sticker from a validated stable snapshot."""
+        if not isinstance(state, tuple) or len(state) != len(self._faces):
+            raise ValueError(f"board state must contain exactly {len(self._faces)} faces")
+        if any(not isinstance(face_state, tuple) or len(face_state) != 12 for face_state in state):
+            raise ValueError("each saved face must contain exactly 12 sticker colors")
+        if any(not isinstance(color, FaceColor) for face_state in state for color in face_state):
+            raise TypeError("every saved sticker must be a FaceColor")
+
+        for face, face_state in zip(self._faces, state, strict=True):
+            face.edge_colors = face_state[:6]
+            face.corner_colors = face_state[6:]
+
 
 BOARD = PeriodicBoard()

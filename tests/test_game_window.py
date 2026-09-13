@@ -196,7 +196,7 @@ def test_escape_does_not_close_the_window(application) -> None:
     window.close()
 
 
-def test_main_menu_has_requested_structure_and_disabled_future_commands(application) -> None:
+def test_main_menu_has_requested_structure_and_game_file_commands(application) -> None:
     window = GameWindow(Settings())
     window.board_widget._frame_timer.stop()
 
@@ -238,11 +238,44 @@ def test_main_menu_has_requested_structure_and_disabled_future_commands(applicat
         *(f"Macro {slot} (Reverse)" for slot in "1234567890"),
     ]
     assert window.quit_action.menuRole() is QAction.MenuRole.QuitRole
-    assert not window.open_action.isEnabled()
+    assert window.open_action.isEnabled()
+    assert window.save_action.isEnabled()
+    assert window.save_as_action.isEnabled()
     assert window.reset_action.isEnabled()
     assert window.scrumble_action.isEnabled()
     assert not window.start_setup_move_action.isEnabled()
 
+    window.close()
+
+
+def test_save_and_open_actions_round_trip_current_game(application, monkeypatch, tmp_path) -> None:
+    window = GameWindow(Settings(turn_animation_duration_seconds=0.001))
+    window.board_widget._frame_timer.stop()
+    window.board_widget.scrumble()
+    window.board_widget._perform_new_turn(
+        TurnCommand(HexCoordinate(0, 0), TurnDirection.CLOCKWISE),
+    )
+    _finish_turns(window.board_widget)
+    expected_stickers = window.board_widget.board.sticker_state()
+    path = tmp_path / "saved_game.json"
+    monkeypatch.setattr(
+        "magic_tile.ui.game_window.QFileDialog.getSaveFileName",
+        lambda *args: (str(path), ""),
+    )
+
+    window.save_action.trigger()
+    assert window.board_widget.status_message == "Game saved to saved_game.json"
+    window.board_widget.reset()
+    monkeypatch.setattr(
+        "magic_tile.ui.game_window.QFileDialog.getOpenFileName",
+        lambda *args: (str(path), ""),
+    )
+    window.open_action.trigger()
+
+    assert window.board_widget.board.sticker_state() == expected_stickers
+    assert window.board_widget.game_active
+    assert window.board_widget.move_count == 1
+    assert window.current_save_path == path
     window.close()
 
 

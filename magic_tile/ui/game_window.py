@@ -7,6 +7,7 @@ import sys
 import time
 from collections import deque
 from dataclasses import dataclass
+from pathlib import Path
 
 from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtGui import (
@@ -19,11 +20,17 @@ from PyQt6.QtGui import (
     QPainter,
     QWheelEvent,
 )
-from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget
+from PyQt6.QtWidgets import QApplication, QFileDialog, QMainWindow, QWidget
 
 from magic_tile.domain import HexCoordinate, PeriodicBoard, TurnDirection
 from magic_tile.input import MacroRecording, MacroSelection, TurnCommand, TurnHistory, TurnHistorySnapshot
-from magic_tile.persistence import Settings, save_settings
+from magic_tile.persistence import (
+    GameState,
+    Settings,
+    load_game_state,
+    save_game_state,
+    save_settings,
+)
 from magic_tile.ui.camera import Camera
 from magic_tile.ui.hex_grid import HEX_HEIGHT, hex_at_point
 from magic_tile.ui.qt_renderer import (
@@ -42,6 +49,7 @@ WINDOW_TITLE = "MagicTile"
 PAN_START_DISTANCE_PX = 5
 MACRO_MENU_SLOT_ORDER = (*range(1, 10), 0)
 SCRAMBLE_MOVE_COUNTS = (3, 5, 10, 50)
+GAME_SAVE_FILTER = "MagicTile saves (*.json);;All files (*)"
 
 
 def _left_drag_started(button_down_at: tuple[int, int], current_position: tuple[int, int]) -> bool:
@@ -318,6 +326,24 @@ class GameBoardWidget(QWidget):
         self.board.reset()
         self.game_active = False
         self.move_count = 0
+        self.update()
+
+    def capture_game_state(self) -> GameState:
+        """Return the complete persistent state of the current game."""
+        return GameState.capture(
+            self.board,
+            game_active=self.game_active,
+            move_count=self.move_count,
+        )
+
+    def restore_game_state(self, state: GameState) -> None:
+        """Replace the current session with a validated saved game."""
+        if not isinstance(state, GameState):
+            raise TypeError("state must be a GameState")
+        self._prepare_for_new_board_state()
+        state.restore_board(self.board)
+        self.game_active = state.game_active
+        self.move_count = state.move_count
         self.update()
 
     def scrumble(self, turn_count: int = 3) -> None:
@@ -624,6 +650,7 @@ class GameWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle(WINDOW_TITLE)
         self.board_widget = GameBoardWidget(settings, self)
+        self.current_save_path: Path | None = None
         self.setCentralWidget(self.board_widget)
         self._create_actions()
         self._create_main_menu()
@@ -631,9 +658,20 @@ class GameWindow(QMainWindow):
 
     def _create_actions(self) -> None:
         """Create reusable application commands for the menu and shortcuts."""
-        self.open_action = self._unavailable_action("Open", QKeySequence.StandardKey.Open)
-        self.save_action = self._unavailable_action("Save", QKeySequence.StandardKey.Save)
-        self.save_as_action = self._unavailable_action("Save As", QKeySequence.StandardKey.SaveAs)
+        self.open_action = QAction("Open", self)
+        self.open_action.setObjectName("open_action")
+        self.open_action.setShortcuts(QKeySequence.StandardKey.Open)
+        self.open_action.triggered.connect(self.open_game)
+
+        self.save_action = QAction("Save", self)
+        self.save_action.setObjectName("save_action")
+        self.save_action.setShortcuts(QKeySequence.StandardKey.Save)
+        self.save_action.triggered.connect(self.save_game)
+
+        self.save_as_action = QAction("Save As", self)
+        self.save_as_action.setObjectName("save_as_action")
+        self.save_as_action.setShortcuts(QKeySequence.StandardKey.SaveAs)
+        self.save_as_action.triggered.connect(self.save_game_as)
 
         self.quit_action = QAction("Quit", self)
         self.quit_action.setObjectName("quit_action")
@@ -668,6 +706,56 @@ class GameWindow(QMainWindow):
         self.start_setup_move_action = self._unavailable_action("Start Setup Move")
         self.end_setup_move_action = self._unavailable_action("End Setup Move")
         self.unwind_setup_move_action = self._unavailable_action("Unwind Setup Move")
+
+    def open_game(self) -> None:
+        """Choose a save file and replace the current game with its contents."""
+        filename, _ = QFileDialog.getOpenFileName(self, "Open MagicTile Game", "", GAME_SAVE_FILTER)
+        if not filename:
+            return
+
+        path = Path(filename)
+        try:
+            state = load_game_state(path)
+            self.board_widget.restore_game_state(state)
+        except (OSError, UnicodeError, ValueError) as error:
+            self.board_widget._show_status(f"Could not open game: {error}", True, time.monotonic(), 5.0)
+            self.board_widget.update()
+            return
+
+        self.current_save_path = path
+        self.board_widget._show_status("Game loaded", False, time.monotonic())
+        self.board_widget.update()
+
+    def save_game(self) -> None:
+        """Save to the current file, prompting for one when necessary."""
+        if self.current_save_path is None:
+            self.save_game_as()
+            return
+        self._save_game_to(self.current_save_path)
+
+    def save_game_as(self) -> None:
+        """Choose a file and save the current game to it."""
+        initial = (
+            str(self.current_save_path)
+            if self.current_save_path is not None
+            else "magic_tile_save.json"
+        )
+        filename, _ = QFileDialog.getSaveFileName(self, "Save MagicTile Game", initial, GAME_SAVE_FILTER)
+        if filename:
+            self._save_game_to(Path(filename))
+
+    def _save_game_to(self, path: Path) -> None:
+        """Persist the current game and report errors without replacing its path."""
+        try:
+            save_game_state(self.board_widget.capture_game_state(), path)
+        except (OSError, ValueError) as error:
+            self.board_widget._show_status(f"Could not save game: {error}", True, time.monotonic(), 5.0)
+            self.board_widget.update()
+            return
+
+        self.current_save_path = path
+        self.board_widget._show_status(f"Game saved to {path.name}", False, time.monotonic())
+        self.board_widget.update()
 
     def _unavailable_action(
         self,
