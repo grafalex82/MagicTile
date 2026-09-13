@@ -224,6 +224,19 @@ class PeriodicBoard:
             face.edge_colors = tuple(new_edges[face])
             face.corner_colors = tuple(new_corners[face])
 
+    def reset(self) -> None:
+        """Restore every movable sticker to the solved configuration."""
+        for face in self._faces:
+            face.edge_colors = (face.color,) * 6
+            face.corner_colors = (face.color,) * 6
+
+    def is_solved(self) -> bool:
+        """Return whether every sticker matches the centre of its face."""
+        return all(
+            all(color is face.color for color in face.edge_colors + face.corner_colors)
+            for face in self._faces
+        )
+
     def affected_slots(self, coordinate: HexCoordinate) -> frozenset[Slot]:
         """Return face-reference-addressed slots moved by the turn group."""
         if not isinstance(coordinate, HexCoordinate):

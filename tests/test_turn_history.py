@@ -38,6 +38,18 @@ def test_history_is_unbounded() -> None:
     assert history.undo() is None
 
 
+def test_clear_discards_undo_and_redo_branches() -> None:
+    history = TurnHistory()
+    history.record(TurnCommand(HexCoordinate(0, 0), TurnDirection.CLOCKWISE))
+    history.record(TurnCommand(HexCoordinate(1, 0), TurnDirection.COUNTERCLOCKWISE))
+    history.undo()
+
+    history.clear()
+
+    assert history.undo() is None
+    assert history.redo() is None
+
+
 def test_snapshot_restores_undo_and_redo_branches_after_provisional_turns() -> None:
     history = TurnHistory()
     first = TurnCommand(HexCoordinate(0, 0), TurnDirection.CLOCKWISE)

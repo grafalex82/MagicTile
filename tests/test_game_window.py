@@ -215,6 +215,12 @@ def test_main_menu_has_requested_structure_and_disabled_future_commands(applicat
         "Undo",
         "Redo",
     ]
+    assert [action.text() for action in window.scrumble_menu.actions()] == [
+        "3 moves",
+        "5 moves",
+        "10 moves",
+        "50 moves",
+    ]
     assert [action.text() for action in window.macro_menu.actions()] == [
         "Record",
         "Play",
@@ -233,8 +239,30 @@ def test_main_menu_has_requested_structure_and_disabled_future_commands(applicat
     ]
     assert window.quit_action.menuRole() is QAction.MenuRole.QuitRole
     assert not window.open_action.isEnabled()
-    assert not window.reset_action.isEnabled()
+    assert window.reset_action.isEnabled()
+    assert window.scrumble_action.isEnabled()
     assert not window.start_setup_move_action.isEnabled()
+
+    window.close()
+
+
+def test_scrumble_menu_actions_apply_their_move_counts(application, monkeypatch) -> None:
+    window = GameWindow(Settings())
+    window.board_widget._frame_timer.stop()
+    turns = []
+    monkeypatch.setattr(
+        window.board_widget.board,
+        "turn",
+        lambda coordinate, direction: turns.append((coordinate, direction)),
+    )
+
+    for expected_count, action in zip((3, 5, 10, 50), window.scrumble_actions, strict=True):
+        turns.clear()
+        action.trigger()
+
+        assert len(turns) == expected_count
+        assert window.board_widget.game_active
+        assert window.board_widget.move_count == 0
 
     window.close()
 
@@ -262,6 +290,64 @@ def test_main_menu_actions_use_existing_board_commands(application) -> None:
     assert window.board_widget.macro_recording is not None
     assert window.board_widget.macro_recording.slot == 4
     window.close()
+
+
+def test_free_turns_do_not_start_a_game_or_count_moves(widget) -> None:
+    widget._perform_new_turn(TurnCommand(HexCoordinate(0, 0), TurnDirection.CLOCKWISE))
+
+    assert not widget.game_active
+    assert widget.move_count == 0
+    assert widget.status_message is None
+
+
+def test_reset_restores_board_stops_game_and_clears_history(widget) -> None:
+    widget.scrumble()
+    widget._perform_new_turn(TurnCommand(HexCoordinate(0, 0), TurnDirection.CLOCKWISE))
+
+    widget.reset()
+
+    assert widget.board.is_solved()
+    assert not widget.game_active
+    assert widget.move_count == 0
+    assert widget.turn_history.undo() is None
+    assert widget.turn_history.redo() is None
+
+
+def test_scrumble_applies_three_immediate_turns_and_starts_game(widget, monkeypatch) -> None:
+    coordinate = HexCoordinate(0, 0)
+    choices = iter((coordinate, TurnDirection.CLOCKWISE) * 3)
+    monkeypatch.setattr("magic_tile.ui.game_window.random.choice", lambda values: next(choices))
+    widget._perform_new_turn(TurnCommand(HexCoordinate(1, 0), TurnDirection.CLOCKWISE))
+
+    widget.scrumble()
+
+    expected = PeriodicBoard()
+    for _ in range(3):
+        expected.turn(coordinate, TurnDirection.CLOCKWISE)
+    assert widget.board.sticker_state() == expected.sticker_state()
+    assert widget.animation is None
+    assert widget.game_active
+    assert widget.move_count == 0
+    assert widget.turn_history.undo() is None
+    assert widget.turn_history.redo() is None
+
+
+def test_solving_active_game_shows_move_count(widget, monkeypatch) -> None:
+    coordinate = HexCoordinate(0, 0)
+    choices = iter((coordinate, TurnDirection.CLOCKWISE) * 3)
+    monkeypatch.setattr("magic_tile.ui.game_window.random.choice", lambda values: next(choices))
+    widget.scrumble()
+
+    for _ in range(3):
+        widget._perform_new_turn(TurnCommand(coordinate, TurnDirection.CLOCKWISE))
+        if widget.game_active:
+            _finish_turns(widget)
+
+    assert widget.board.is_solved()
+    assert not widget.game_active
+    assert widget.move_count == 3
+    assert widget.status_message == "Congratulations! Puzzle solved in 3 moves."
+    assert not widget.status_is_error
 
 
 def test_reverse_macro_menu_action_uses_inverse_turns(application) -> None:

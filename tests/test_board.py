@@ -169,3 +169,14 @@ def test_turns_preserve_all_sticker_colors() -> None:
         board.turn(coordinate, direction)
 
     assert color_counts() == original_counts
+
+
+def test_reset_restores_solved_state() -> None:
+    board = PeriodicBoard()
+    board.turn(HexCoordinate(0, 0), TurnDirection.CLOCKWISE)
+
+    assert not board.is_solved()
+
+    board.reset()
+
+    assert board.is_solved()

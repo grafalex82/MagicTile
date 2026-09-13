@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 import sys
 import time
 from collections import deque
@@ -40,6 +41,7 @@ WINDOW_SIZE = (1280, 750)
 WINDOW_TITLE = "MagicTile"
 PAN_START_DISTANCE_PX = 5
 MACRO_MENU_SLOT_ORDER = (*range(1, 10), 0)
+SCRAMBLE_MOVE_COUNTS = (3, 5, 10, 50)
 
 
 def _left_drag_started(button_down_at: tuple[int, int], current_position: tuple[int, int]) -> bool:
@@ -84,6 +86,11 @@ class GameBoardWidget(QWidget):
         self.board = PeriodicBoard() if board is None else board
         self.camera = Camera()
         self.turn_history = TurnHistory()
+
+        # A game session begins only through Puzzle -> Scrumble. Free turns
+        # made before that point do not contribute to a score or trigger a win.
+        self.game_active = False
+        self.move_count = 0
 
         # Initialize macro recording, selection, and queued-playback state.
         self.macro_selection = MacroSelection()
@@ -163,8 +170,11 @@ class GameBoardWidget(QWidget):
                     current,
                     self.settings.turn_animation_duration_seconds,
                 )
+                if queued.record_history:
+                    self._count_player_move(check_for_win=False)
             elif self.playback_active:
                 self.playback_active = False
+                self._check_for_win(current)
 
         # Ask Qt to schedule a paint event for the newly advanced state.
         self.update()
@@ -302,6 +312,29 @@ class GameBoardWidget(QWidget):
             return
         self._apply_history_command(self.turn_history.redo(), now)
 
+    def reset(self) -> None:
+        """Return to the initial board state and leave game mode."""
+        self._prepare_for_new_board_state()
+        self.board.reset()
+        self.game_active = False
+        self.move_count = 0
+        self.update()
+
+    def scrumble(self, turn_count: int = 3) -> None:
+        """Reset, apply the requested immediate random turns, and begin a game."""
+        if not isinstance(turn_count, int) or isinstance(turn_count, bool) or turn_count <= 0:
+            raise ValueError("turn_count must be a positive integer")
+        self._prepare_for_new_board_state()
+        self.board.reset()
+        coordinates = tuple(HexCoordinate(index, 0) for index in range(len(self.board.faces)))
+        directions = tuple(TurnDirection)
+        for _ in range(turn_count):
+            self.board.turn(random.choice(coordinates), random.choice(directions))
+        self.game_active = True
+        self.move_count = 0
+        self._force_static_refresh = True
+        self.update()
+
     def record_macro(self, slot: int, *, now: float | None = None) -> None:
         """Begin recording a macro slot, if board input is currently available."""
         if self.animation is not None or self.playback_active:
@@ -429,6 +462,7 @@ class GameBoardWidget(QWidget):
         self.turn_history.record(command)
         self._synchronize_recording()
         self._begin_animation(command, time.monotonic())
+        self._count_player_move()
 
     def _begin_animation(self, command: TurnCommand, now: float) -> None:
         self.animation = TurnAnimation.begin(
@@ -446,6 +480,42 @@ class GameBoardWidget(QWidget):
             raise RuntimeError("macro recording has no history snapshot")
         commands = self.turn_history.commands_since(self.recording_history.position)
         self.macro_recording.synchronize(self.board, commands)
+
+    def _prepare_for_new_board_state(self) -> None:
+        """Clear transient interaction and history before reset or scrambling."""
+        self.animation = None
+        self.turn_queue.clear()
+        self.playback_active = False
+        self.turn_history.clear()
+        self.macro_recording = None
+        self.recording_history = None
+        self.macro_selection.clear()
+        self.left_button_down_at = None
+        self.left_button_selecting = False
+        self.panning = False
+        self.status_message = None
+        self._force_static_refresh = True
+
+    def _count_player_move(self, *, check_for_win: bool = True) -> None:
+        """Count a player turn in game mode and optionally test the result."""
+        if not self.game_active:
+            return
+        self.move_count += 1
+        if check_for_win:
+            self._check_for_win(time.monotonic())
+
+    def _check_for_win(self, now: float) -> None:
+        """Finish the active game when the board reaches its solved state."""
+        if not self.game_active or not self.board.is_solved():
+            return
+        self.game_active = False
+        move_word = "move" if self.move_count == 1 else "moves"
+        self._show_status(
+            f"Congratulations! Puzzle solved in {self.move_count} {move_word}.",
+            False,
+            now,
+            duration=5.0,
+        )
 
     def _handle_escape(self, now: float) -> None:
         # Macro playback is intentionally atomic and cannot be canceled.
@@ -571,8 +641,13 @@ class GameWindow(QMainWindow):
         self.quit_action.setMenuRole(QAction.MenuRole.QuitRole)
         self.quit_action.triggered.connect(QApplication.quit)
 
-        self.reset_action = self._unavailable_action("Reset")
-        self.scrumble_action = self._unavailable_action("Scrumble")
+        self.reset_action = QAction("Reset", self)
+        self.reset_action.setObjectName("reset_action")
+        self.reset_action.triggered.connect(self.board_widget.reset)
+
+        self.scrumble_actions = tuple(
+            self._scrumble_action(move_count) for move_count in SCRAMBLE_MOVE_COUNTS
+        )
 
         self.undo_action = QAction("Undo", self)
         self.undo_action.setObjectName("undo_action")
@@ -628,6 +703,17 @@ class GameWindow(QMainWindow):
             )
         return action
 
+    def _scrumble_action(self, move_count: int) -> QAction:
+        """Create a scramble action for one of the offered move counts."""
+        action = QAction(f"{move_count} moves", self)
+        action.setObjectName(f"scrumble_{move_count}_moves_action")
+        action.triggered.connect(
+            lambda checked=False, selected_count=move_count: (
+                self.board_widget.scrumble(selected_count)
+            ),
+        )
+        return action
+
     def _create_main_menu(self) -> None:
         """Build the requested top-level menu hierarchy."""
         menu_bar = self.menuBar()
@@ -638,7 +724,10 @@ class GameWindow(QMainWindow):
         self.file_menu.addAction(self.quit_action)
 
         self.puzzle_menu = menu_bar.addMenu("Puzzle")
-        self.puzzle_menu.addActions((self.reset_action, self.scrumble_action))
+        self.puzzle_menu.addAction(self.reset_action)
+        self.scrumble_menu = self.puzzle_menu.addMenu("Scrumble")
+        self.scrumble_menu.addActions(self.scrumble_actions)
+        self.scrumble_action = self.scrumble_menu.menuAction()
         self.puzzle_menu.addSeparator()
         self.puzzle_menu.addActions((self.undo_action, self.redo_action))
 

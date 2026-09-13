@@ -41,6 +41,11 @@ class TurnHistory:
         self._commands.append(command)
         self._position += 1
 
+    def clear(self) -> None:
+        """Discard all undo and redo commands."""
+        self._commands.clear()
+        self._position = 0
+
     def undo(self, minimum_position: int = 0) -> TurnCommand | None:
         """Move the cursor backward without crossing *minimum_position*."""
         if not 0 <= minimum_position <= self._position:
