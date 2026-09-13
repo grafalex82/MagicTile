@@ -9,21 +9,28 @@ from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
-from PyQt6.QtCore import QTimer, Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import (
     QAction,
     QEnterEvent,
     QKeyEvent,
     QKeySequence,
     QMouseEvent,
-    QPaintEvent,
     QPainter,
+    QPaintEvent,
     QWheelEvent,
 )
 from PyQt6.QtWidgets import QApplication, QFileDialog, QMainWindow, QWidget
 
 from magic_tile.domain import HexCoordinate, PeriodicBoard, TurnDirection
-from magic_tile.input import MacroRecording, MacroSelection, TurnCommand, TurnHistory, TurnHistorySnapshot
+from magic_tile.input import (
+    MacroRecording,
+    MacroSelection,
+    SetupMove,
+    TurnCommand,
+    TurnHistory,
+    TurnHistorySnapshot,
+)
 from magic_tile.persistence import (
     GameState,
     Settings,
@@ -75,6 +82,7 @@ class _QueuedTurn:
 
     command: TurnCommand
     record_history: bool
+    count_player_move: bool = True
 
 
 class GameBoardWidget(QWidget):
@@ -104,6 +112,9 @@ class GameBoardWidget(QWidget):
         self.macro_selection = MacroSelection()
         self.macro_recording: MacroRecording | None = None
         self.recording_history: TurnHistorySnapshot | None = None
+        self.setup_move: SetupMove | None = None
+        self.setup_recording_history: TurnHistorySnapshot | None = None
+        self.setup_history_floor: int | None = None
         self.turn_queue: deque[_QueuedTurn] = deque()
         self.playback_active = False
 
@@ -171,6 +182,7 @@ class GameBoardWidget(QWidget):
                 queued = self.turn_queue.popleft()
                 if queued.record_history:
                     self.turn_history.record(queued.command)
+                    self._synchronize_setup_move()
                 self.animation = TurnAnimation.begin(
                     self.board,
                     queued.command.coordinate,
@@ -178,7 +190,7 @@ class GameBoardWidget(QWidget):
                     current,
                     self.settings.turn_animation_duration_seconds,
                 )
-                if queued.record_history:
+                if queued.record_history and queued.count_player_move:
                     self._count_player_move(check_for_win=False)
             elif self.playback_active:
                 self.playback_active = False
@@ -259,7 +271,7 @@ class GameBoardWidget(QWidget):
             painter.end()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802 - Qt virtual method
-        """Handle macros, cancellation, and undo/redo shortcuts."""
+        """Handle macros, cancellation, and history shortcuts."""
         # Capture the key and normalized modifier state once for dispatch.
         now = time.monotonic()
         key = event.key()
@@ -311,7 +323,14 @@ class GameBoardWidget(QWidget):
         """Undo one turn through the shared animated history path."""
         if self.animation is not None or self.playback_active:
             return
-        minimum = self.recording_history.position if self.recording_history is not None else 0
+        minimum = max(
+            self.recording_history.position if self.recording_history is not None else 0,
+            (
+                self.setup_recording_history.position
+                if self.setup_recording_history is not None
+                else self.setup_history_floor or 0
+            ),
+        )
         self._apply_history_command(self.turn_history.undo(minimum), now)
 
     def redo(self, *, now: float | None = None) -> None:
@@ -334,6 +353,7 @@ class GameBoardWidget(QWidget):
             self.board,
             game_active=self.game_active,
             move_count=self.move_count,
+            setup_move=self.setup_move,
         )
 
     def restore_game_state(self, state: GameState) -> None:
@@ -344,6 +364,13 @@ class GameBoardWidget(QWidget):
         state.restore_board(self.board)
         self.game_active = state.game_active
         self.move_count = state.move_count
+        self.setup_move = state.setup_move
+        if self.setup_move is not None and self.setup_move.recording:
+            self.setup_recording_history = self.turn_history.snapshot()
+            for command in self.setup_move.commands:
+                self.turn_history.record(command)
+        elif self.setup_move is not None:
+            self.setup_history_floor = self.turn_history.snapshot().position
         self.update()
 
     def scrumble(self, turn_count: int = 3) -> None:
@@ -381,11 +408,67 @@ class GameBoardWidget(QWidget):
         self._play_macro(slot, reverse=reverse, now=time.monotonic() if now is None else now)
         self.update()
 
+    def start_setup_move(self, *, now: float | None = None) -> None:
+        """Start recording a new setup sequence when none is active."""
+        current = time.monotonic() if now is None else now
+        if self.animation is not None or self.playback_active:
+            return
+        if self.macro_recording is not None:
+            self._show_status("Finish the current macro recording first", True, current)
+        elif self.setup_move is not None and not self.setup_move.recording:
+            self._show_status("Unwind the current Setup Move first", True, current)
+        else:
+            self.setup_move = SetupMove()
+            self.setup_recording_history = self.turn_history.snapshot()
+            self.setup_history_floor = None
+            self._show_status("Setup Move recording started", False, current)
+        self.update()
+
+    def end_setup_move(self, *, now: float | None = None) -> None:
+        """Finish recording while retaining the sequence for later unwind."""
+        current = time.monotonic() if now is None else now
+        if self.animation is not None or self.playback_active:
+            return
+        if self.setup_move is None or not self.setup_move.recording:
+            return
+        self.setup_recording_history = None
+        if self.setup_move.commands:
+            self.setup_move = self.setup_move.finish()
+            self.setup_history_floor = self.turn_history.snapshot().position
+            self._show_status("Setup Move recording ended", False, current)
+        else:
+            self.setup_move = None
+            self.setup_history_floor = None
+            self._show_status("Empty Setup Move discarded", False, current)
+        self.update()
+
+    def unwind_setup_move(self, *, now: float | None = None) -> None:
+        """Play the active setup sequence backward once, then discard it."""
+        current = time.monotonic() if now is None else now
+        if self.animation is not None or self.playback_active or self.setup_move is None:
+            return
+        rollback_commands = self.setup_move.rollback_commands
+        self.setup_move = None
+        self.setup_recording_history = None
+        self.setup_history_floor = None
+        self.turn_queue.extend(
+            _QueuedTurn(command, record_history=True, count_player_move=False)
+            for command in rollback_commands
+        )
+        self.playback_active = bool(self.turn_queue)
+        self._show_status("Setup Move unwound", False, current)
+        if self.playback_active:
+            self.advance(current)
+        else:
+            self._check_for_win(current)
+        self.update()
+
     def _apply_history_command(self, command: TurnCommand | None, now: float | None) -> None:
         """Animate a command returned by undo or redo and refresh recording state."""
         if command is not None:
             self.macro_selection.clear()
             self._synchronize_recording()
+            self._synchronize_setup_move()
             self._begin_animation(command, time.monotonic() if now is None else now)
         self.update()
 
@@ -487,6 +570,7 @@ class GameBoardWidget(QWidget):
         self.macro_selection.clear()
         self.turn_history.record(command)
         self._synchronize_recording()
+        self._synchronize_setup_move()
         self._begin_animation(command, time.monotonic())
         self._count_player_move()
 
@@ -507,6 +591,15 @@ class GameBoardWidget(QWidget):
         commands = self.turn_history.commands_since(self.recording_history.position)
         self.macro_recording.synchronize(self.board, commands)
 
+    def _synchronize_setup_move(self) -> None:
+        """Match an active setup recording to its editable history segment."""
+        if self.setup_move is None or not self.setup_move.recording:
+            return
+        if self.setup_recording_history is None:
+            raise RuntimeError("setup move recording has no history snapshot")
+        commands = self.turn_history.commands_since(self.setup_recording_history.position)
+        self.setup_move = self.setup_move.synchronize(commands)
+
     def _prepare_for_new_board_state(self) -> None:
         """Clear transient interaction and history before reset or scrambling."""
         self.animation = None
@@ -515,6 +608,9 @@ class GameBoardWidget(QWidget):
         self.turn_history.clear()
         self.macro_recording = None
         self.recording_history = None
+        self.setup_move = None
+        self.setup_recording_history = None
+        self.setup_history_floor = None
         self.macro_selection.clear()
         self.left_button_down_at = None
         self.left_button_selecting = False
@@ -548,9 +644,17 @@ class GameBoardWidget(QWidget):
         if self.playback_active:
             return
 
+        # Cancel setup recording without changing turns already made on the board.
+        if self.setup_move is not None and self.setup_move.recording:
+            self.setup_move = None
+            self.setup_recording_history = None
+            self.setup_history_floor = None
+            self.macro_selection.clear()
+            self._show_status("Setup Move recording canceled", False, now)
+
         # Cancel a live recording by queuing inverse moves, restoring its
         # history snapshot, and clearing all provisional macro state.
-        if self.macro_recording is not None:
+        elif self.macro_recording is not None:
             self.turn_queue.extend(
                 _QueuedTurn(command, record_history=False)
                 for command in self.macro_recording.rollback_commands
@@ -573,7 +677,9 @@ class GameBoardWidget(QWidget):
         self.update()
 
     def _begin_recording(self, slot: int, now: float) -> None:
-        if self.macro_recording is None:
+        if self.setup_move is not None and self.setup_move.recording:
+            self._show_status("End Setup Move recording first", True, now)
+        elif self.macro_recording is None:
             self.macro_selection.clear()
             self.macro_recording = MacroRecording(slot)
             self.recording_history = self.turn_history.snapshot()
@@ -611,6 +717,9 @@ class GameBoardWidget(QWidget):
     def _play_macro(self, slot: int, *, reverse: bool, now: float) -> None:
         # A recording cannot recursively launch another macro.
         if self.macro_recording is not None:
+            return
+        if self.setup_move is not None and self.setup_move.recording:
+            self._show_status("End Setup Move recording first", True, now)
             return
 
         # Empty macro slots have no action associated with their digit.
@@ -703,9 +812,15 @@ class GameWindow(QMainWindow):
             self._macro_action("Play", slot, reverse=True) for slot in range(10)
         )
 
-        self.start_setup_move_action = self._unavailable_action("Start Setup Move")
-        self.end_setup_move_action = self._unavailable_action("End Setup Move")
-        self.unwind_setup_move_action = self._unavailable_action("Unwind Setup Move")
+        self.start_setup_move_action = self._setup_move_action(
+            "Start Setup Move", "F1", self.board_widget.start_setup_move
+        )
+        self.end_setup_move_action = self._setup_move_action(
+            "End Setup Move", "F2", self.board_widget.end_setup_move
+        )
+        self.unwind_setup_move_action = self._setup_move_action(
+            "Unwind Setup Move", "F3", self.board_widget.unwind_setup_move
+        )
 
     def open_game(self) -> None:
         """Choose a save file and replace the current game with its contents."""
@@ -757,17 +872,12 @@ class GameWindow(QMainWindow):
         self.board_widget._show_status(f"Game saved to {path.name}", False, time.monotonic())
         self.board_widget.update()
 
-    def _unavailable_action(
-        self,
-        text: str,
-        shortcut: QKeySequence.StandardKey | None = None,
-    ) -> QAction:
-        """Create a disabled placeholder for a command planned but not implemented."""
+    def _setup_move_action(self, text: str, shortcut: str, callback) -> QAction:
+        """Create an enabled setup-move command with its function-key binding."""
         action = QAction(text, self)
         action.setObjectName(f"{text.lower().replace(' ', '_')}_action")
-        if shortcut is not None:
-            action.setShortcuts(shortcut)
-        action.setEnabled(False)
+        action.setShortcut(QKeySequence(shortcut))
+        action.triggered.connect(callback)
         return action
 
     def _macro_action(self, operation: str, slot: int, *, reverse: bool = False) -> QAction:

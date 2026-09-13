@@ -3,6 +3,7 @@ import json
 import pytest
 
 from magic_tile.domain import HexCoordinate, PeriodicBoard, TurnDirection
+from magic_tile.input import SetupMove, TurnCommand
 from magic_tile.persistence import GameState, load_game_state, save_game_state
 from magic_tile.persistence.game_state import GAME_STATE_FORMAT, GAME_STATE_VERSION
 
@@ -25,6 +26,73 @@ def test_game_state_round_trip_restores_board_and_move_count(tmp_path) -> None:
     document = json.loads(path.read_text(encoding="utf-8"))
     assert document["format"] == GAME_STATE_FORMAT
     assert document["version"] == GAME_STATE_VERSION
+
+
+@pytest.mark.parametrize("recording", (True, False))
+def test_game_state_round_trip_restores_active_setup_move(tmp_path, recording) -> None:
+    commands = (
+        TurnCommand(HexCoordinate(-3, 7), TurnDirection.CLOCKWISE),
+        TurnCommand(HexCoordinate(4, -2), TurnDirection.COUNTERCLOCKWISE),
+    )
+    state = GameState.capture(
+        PeriodicBoard(),
+        game_active=False,
+        move_count=0,
+        setup_move=SetupMove(commands, recording),
+    )
+    path = tmp_path / "setup.json"
+
+    save_game_state(state, path)
+    loaded = load_game_state(path)
+
+    assert loaded.setup_move == state.setup_move
+
+
+def test_game_state_loads_without_an_optional_setup_move(tmp_path) -> None:
+    path = tmp_path / "old.json"
+    save_game_state(GameState.capture(PeriodicBoard(), game_active=False, move_count=0), path)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data.pop("setup_move")
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    assert load_game_state(path).setup_move is None
+
+
+def test_game_state_treats_an_empty_finished_setup_move_as_inactive(tmp_path) -> None:
+    path = tmp_path / "empty_setup.json"
+    save_game_state(GameState.capture(PeriodicBoard(), game_active=False, move_count=0), path)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["setup_move"] = {"recording": False, "commands": []}
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    assert load_game_state(path).setup_move is None
+
+
+@pytest.mark.parametrize(
+    "setup_move",
+    (
+        {},
+        {"recording": "yes", "commands": []},
+        {"recording": True, "commands": "invalid"},
+        {
+            "recording": True,
+            "commands": [{"q": True, "r": 0, "direction": "clockwise"}],
+        },
+        {
+            "recording": False,
+            "commands": [{"q": 0, "r": 0, "direction": "sideways"}],
+        },
+    ),
+)
+def test_invalid_saved_setup_move_is_rejected(tmp_path, setup_move) -> None:
+    path = tmp_path / "invalid_setup.json"
+    save_game_state(GameState.capture(PeriodicBoard(), game_active=False, move_count=0), path)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["setup_move"] = setup_move
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        load_game_state(path)
 
 
 @pytest.mark.parametrize(

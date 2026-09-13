@@ -6,7 +6,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from magic_tile.domain import FaceColor, PeriodicBoard
+from magic_tile.domain import FaceColor, HexCoordinate, PeriodicBoard, TurnDirection
+from magic_tile.input import SetupMove, TurnCommand
 
 GAME_STATE_FORMAT = "magic-tile-game"
 GAME_STATE_VERSION = 1
@@ -19,6 +20,7 @@ class GameState:
     stickers: tuple[tuple[FaceColor, ...], ...]
     game_active: bool
     move_count: int
+    setup_move: SetupMove | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.game_active, bool):
@@ -27,17 +29,26 @@ class GameState:
             raise TypeError("move_count must be an integer")
         if self.move_count < 0:
             raise ValueError("move_count cannot be negative")
+        if self.setup_move is not None and not isinstance(self.setup_move, SetupMove):
+            raise TypeError("setup_move must be a SetupMove or None")
 
         # Reuse the board model's structural validation without retaining or
         # modifying a temporary board after construction.
         PeriodicBoard().restore_sticker_state(self.stickers)
 
     @classmethod
-    def capture(cls, board: PeriodicBoard, *, game_active: bool, move_count: int) -> GameState:
+    def capture(
+        cls,
+        board: PeriodicBoard,
+        *,
+        game_active: bool,
+        move_count: int,
+        setup_move: SetupMove | None = None,
+    ) -> GameState:
         """Capture the settled model and score from the current session."""
         if not isinstance(board, PeriodicBoard):
             raise TypeError("board must be a PeriodicBoard")
-        return cls(board.sticker_state(), game_active, move_count)
+        return cls(board.sticker_state(), game_active, move_count, setup_move)
 
     def restore_board(self, board: PeriodicBoard) -> None:
         """Apply this saved sticker arrangement to *board*."""
@@ -84,7 +95,8 @@ def load_game_state(path: Path | str) -> GameState:
         corners = _parse_colors(raw_face.get("corner_colors"), f"face {index} corner_colors")
         stickers.append(edges + corners)
 
-    return GameState(tuple(stickers), game_active, move_count)
+    setup_move = _parse_setup_move(data.get("setup_move"))
+    return GameState(tuple(stickers), game_active, move_count, setup_move)
 
 
 def save_game_state(state: GameState, path: Path | str) -> None:
@@ -98,6 +110,7 @@ def save_game_state(state: GameState, path: Path | str) -> None:
         "version": GAME_STATE_VERSION,
         "game_active": state.game_active,
         "move_count": state.move_count,
+        "setup_move": _serialize_setup_move(state.setup_move),
         "faces": [
             {
                 "center_color": face.color.name,
@@ -109,6 +122,66 @@ def save_game_state(state: GameState, path: Path | str) -> None:
     }
     temporary_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     temporary_path.replace(save_path)
+
+
+def _parse_setup_move(value: object) -> SetupMove | None:
+    """Parse the optional active setup sequence from a save."""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("'setup_move' must be an object or null.")
+    recording = value.get("recording")
+    raw_commands = value.get("commands")
+    if not isinstance(recording, bool):
+        raise ValueError("'setup_move.recording' must be a boolean.")
+    if not isinstance(raw_commands, list):
+        raise ValueError("'setup_move.commands' must be a list.")
+
+    commands: list[TurnCommand] = []
+    for index, raw_command in enumerate(raw_commands):
+        if not isinstance(raw_command, dict):
+            raise ValueError(f"Setup command {index} must be an object.")
+        q = raw_command.get("q")
+        r = raw_command.get("r")
+        direction = raw_command.get("direction")
+        if any(isinstance(value, bool) or not isinstance(value, int) for value in (q, r)):
+            raise ValueError(f"Setup command {index} coordinates must be integers.")
+        if direction not in ("clockwise", "counterclockwise"):
+            raise ValueError(f"Setup command {index} has an invalid direction.")
+        commands.append(
+            TurnCommand(
+                HexCoordinate(q, r),
+                (
+                    TurnDirection.CLOCKWISE
+                    if direction == "clockwise"
+                    else TurnDirection.COUNTERCLOCKWISE
+                ),
+            )
+        )
+    if not recording and not commands:
+        return None
+    return SetupMove(tuple(commands), recording)
+
+
+def _serialize_setup_move(setup_move: SetupMove | None) -> dict[str, object] | None:
+    """Convert an active setup sequence to its JSON-compatible form."""
+    if setup_move is None:
+        return None
+    return {
+        "recording": setup_move.recording,
+        "commands": [
+            {
+                "q": command.coordinate.q,
+                "r": command.coordinate.r,
+                "direction": (
+                    "clockwise"
+                    if command.direction is TurnDirection.CLOCKWISE
+                    else "counterclockwise"
+                ),
+            }
+            for command in setup_move.commands
+        ],
+    }
 
 
 def _parse_colors(value: object, field_name: str) -> tuple[FaceColor, ...]:

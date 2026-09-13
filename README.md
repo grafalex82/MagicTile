@@ -20,7 +20,8 @@ portable game saves are implemented; the remaining game flow is still planned.
 - The player can pan and zoom the camera.
 - A left click turns a face counterclockwise; a right click turns it clockwise.
   Keyboard controls will also be available.
-- Planned features include setup moves and reverse playback of setup sequences.
+- Setup moves can be recorded, retained while a formula or macro runs, and
+  unwound automatically in reverse.
 - The game state can be saved and restored between sessions.
 
 See the [design document](docs/DESIGN.md) for details and unresolved questions,
@@ -97,6 +98,17 @@ Up to ten face-relative macros can be stored in slots 0 through 9:
 - Escape clears the selected faces. An ordinary face turn clears them as well;
   completed macro playback keeps them selected for another run.
 
+Use **F1** to start recording a Setup Move and **F2** to stop recording it.
+Ending an empty recording discards it immediately.
+Pressing F1 again during recording discards the recorded sequence and starts
+again from the current board position. Escape cancels and clears a live Setup
+Move recording without reverting turns already made.
+Run the desired formula or macro, then press **F3** to animate the recorded
+setup turns in reverse order and direction. The sequence is cleared as soon as
+the unwind starts, so F3 cannot apply it twice and F1 can begin a new Setup
+Move. An active Setup Move, including whether it is still being recorded, is
+stored in game save files and restored when the save is opened.
+
 Macro slots are kept in `settings.json` using readable relative moves. A number
 identifies a selected face, an apostrophe means counterclockwise, and moves may
 be separated by hyphens or spaces. For example:
@@ -122,7 +134,7 @@ duration defaults to 0.5 seconds, and absent macro slots are empty:
 ```
 
 Use **File → Save** (Ctrl+S) or **File → Save As** to write the current board,
-active-game flag, and used-move count to a versioned JSON file. Use
+active-game flag, used-move count, and active Setup Move to a versioned JSON file. Use
 **File → Open** (Ctrl+O) to restore that file later. Loading a game clears the
 previous session's undo/redo history and any transient animation or macro state.
 

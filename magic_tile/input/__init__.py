@@ -9,6 +9,7 @@ from magic_tile.input.macros import (
     parse_macro,
     serialize_macro,
 )
+from magic_tile.input.setup_moves import SetupMove
 from magic_tile.input.turn_history import TurnCommand, TurnHistory, TurnHistorySnapshot
 
 __all__ = (
@@ -17,6 +18,7 @@ __all__ = (
     "MacroRecording",
     "MacroSelection",
     "MacroTurn",
+    "SetupMove",
     "TurnCommand",
     "TurnHistory",
     "TurnHistorySnapshot",

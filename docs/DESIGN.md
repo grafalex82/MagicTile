@@ -62,10 +62,14 @@ face consists entirely of pieces of its own color.
 - Right mouse button: rotate the selected face clockwise.
 - Keyboard: alternative face selection and rotation controls.
 - Macros: record face-relative move sequences in ten persistent keyboard slots.
-- Setup moves: record a preparation sequence and later undo that sequence in
-  reverse order.
+- Setup moves: F1 records one concrete preparation sequence, F2 ends recording,
+  and F3 plays it once in reverse order and direction before clearing it.
 
-Keyboard bindings have not yet been selected.
+Pressing F1 during an active recording restarts it at the current history
+position. Escape cancels the recording without modifying the board.
+
+An active setup sequence remains independent of the formula or macro played
+after F2 and is included in game saves together with its recording state.
 
 ### Saves and menus
 
@@ -95,10 +99,8 @@ The following remain to be defined:
 2. How is a face's keyboard identifier selected?
 3. What are the scrambling rules: number of moves, immediate inverse moves,
    and random-number seed behavior?
-4. What are the setup-move semantics: one stack or multiple named stacks, and
-   what happens when ordinary moves occur between setup and undo?
-5. Are multiple save slots, autosaving, and portable save files required?
-6. Which items and game modes belong in the main menu?
+4. Are multiple save slots, autosaving, and portable save files required?
+5. Which items and game modes belong in the main menu?
 
 ## Macros
 

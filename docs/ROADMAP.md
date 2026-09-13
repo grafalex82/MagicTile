@@ -34,7 +34,7 @@ Key invariants: a move followed by its inverse restores the original state; six
 - Scramble generator.
 - Move history and undo.
 - Macros.
-- Setup moves and reverse playback.
+- Setup moves and reverse playback. (implemented)
 
 ## 4. Saves and menus
 

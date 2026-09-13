@@ -9,8 +9,8 @@ from PyQt6.QtWidgets import QApplication
 from PyQt6.QtTest import QTest
 
 from magic_tile.domain import HexCoordinate, PeriodicBoard, TurnDirection
-from magic_tile.input import TurnCommand, parse_macro, serialize_macro
-from magic_tile.persistence import Settings
+from magic_tile.input import SetupMove, TurnCommand, parse_macro, serialize_macro
+from magic_tile.persistence import GameState, Settings
 from magic_tile.ui.camera import Camera
 from magic_tile.ui.game_window import (
     GameBoardWidget,
@@ -243,7 +243,10 @@ def test_main_menu_has_requested_structure_and_game_file_commands(application) -
     assert window.save_as_action.isEnabled()
     assert window.reset_action.isEnabled()
     assert window.scrumble_action.isEnabled()
-    assert not window.start_setup_move_action.isEnabled()
+    assert window.start_setup_move_action.isEnabled()
+    assert window.start_setup_move_action.shortcut() == QKeySequence("F1")
+    assert window.end_setup_move_action.shortcut() == QKeySequence("F2")
+    assert window.unwind_setup_move_action.shortcut() == QKeySequence("F3")
 
     window.close()
 
@@ -488,3 +491,158 @@ def test_undo_and_redo_edit_active_macro_on_shared_history(widget, monkeypatch) 
 
     assert len(saved_settings) == 1
     assert serialize_macro(saved_settings[0].macros[4]) == "1"
+
+
+def test_setup_move_records_only_between_start_and_end_then_unwinds_once(widget) -> None:
+    first = TurnCommand(HexCoordinate(0, 0), TurnDirection.CLOCKWISE)
+    second = TurnCommand(HexCoordinate(1, 0), TurnDirection.COUNTERCLOCKWISE)
+    formula = TurnCommand(HexCoordinate(2, 0), TurnDirection.CLOCKWISE)
+    expected = PeriodicBoard()
+    for command in (first, second, formula, second.inverse, first.inverse):
+        expected.turn(command.coordinate, command.direction)
+
+    widget.start_setup_move(now=1.0)
+    for command in (first, second):
+        widget._perform_new_turn(command)
+        _finish_turns(widget)
+    widget.end_setup_move(now=2.0)
+    widget._perform_new_turn(formula)
+    _finish_turns(widget)
+    widget.unwind_setup_move(now=3.0)
+    _finish_turns(widget)
+
+    assert widget.board.sticker_state() == expected.sticker_state()
+    assert widget.setup_move is None
+    state_after_first_unwind = widget.board.sticker_state()
+    widget.unwind_setup_move(now=4.0)
+    assert widget.board.sticker_state() == state_after_first_unwind
+
+
+def test_setup_move_can_be_unwound_while_still_recording(widget) -> None:
+    original = widget.board.sticker_state()
+    widget.start_setup_move(now=1.0)
+    widget._perform_new_turn(TurnCommand(HexCoordinate(0, 0), TurnDirection.CLOCKWISE))
+    _finish_turns(widget)
+
+    widget.unwind_setup_move(now=2.0)
+    _finish_turns(widget)
+
+    assert widget.board.sticker_state() == original
+    assert widget.setup_move is None
+
+
+def test_pressing_f1_again_restarts_setup_recording_from_current_position(widget) -> None:
+    first = TurnCommand(HexCoordinate(0, 0), TurnDirection.CLOCKWISE)
+    second = TurnCommand(HexCoordinate(1, 0), TurnDirection.COUNTERCLOCKWISE)
+    widget.start_setup_move(now=1.0)
+    widget._perform_new_turn(first)
+    _finish_turns(widget)
+
+    widget.start_setup_move(now=2.0)
+    assert widget.setup_move is not None
+    assert widget.setup_move.commands == ()
+    widget._perform_new_turn(second)
+    _finish_turns(widget)
+    assert widget.setup_move.commands == (second,)
+
+    expected = PeriodicBoard()
+    expected.turn(first.coordinate, first.direction)
+    widget.unwind_setup_move(now=3.0)
+    _finish_turns(widget)
+    assert widget.board.sticker_state() == expected.sticker_state()
+
+
+def test_escape_cancels_setup_recording_without_reverting_board(widget) -> None:
+    command = TurnCommand(HexCoordinate(0, 0), TurnDirection.CLOCKWISE)
+    widget.start_setup_move(now=1.0)
+    widget._perform_new_turn(command)
+    _finish_turns(widget)
+    state_before_escape = widget.board.sticker_state()
+
+    widget._handle_escape(now=2.0)
+
+    assert widget.setup_move is None
+    assert widget.board.sticker_state() == state_before_escape
+    assert widget.status_message == "Setup Move recording canceled"
+
+
+def test_setup_move_shortcut_actions_control_recording(application) -> None:
+    window = GameWindow(Settings(turn_animation_duration_seconds=0.001))
+    window.board_widget._frame_timer.stop()
+
+    window.start_setup_move_action.trigger()
+    assert window.board_widget.setup_move is not None
+    assert window.board_widget.setup_move.recording
+
+    window.end_setup_move_action.trigger()
+    assert window.board_widget.setup_move is None
+
+    window.unwind_setup_move_action.trigger()
+    assert window.board_widget.setup_move is None
+    window.close()
+
+
+def test_qt_function_keys_control_setup_move_through_window_actions(application) -> None:
+    window = GameWindow(Settings(turn_animation_duration_seconds=0.001))
+    window.board_widget._frame_timer.stop()
+    window.show()
+    window.board_widget.setFocus()
+    application.processEvents()
+
+    QTest.keyClick(window.board_widget, Qt.Key.Key_F1)
+    assert window.board_widget.setup_move is not None
+    assert window.board_widget.setup_move.recording
+    QTest.keyClick(window.board_widget, Qt.Key.Key_F2)
+    assert window.board_widget.setup_move is None
+    QTest.keyClick(window.board_widget, Qt.Key.Key_F3)
+    assert window.board_widget.setup_move is None
+    window.close()
+
+
+def test_empty_finished_setup_move_does_not_block_a_new_recording(widget) -> None:
+    widget.start_setup_move(now=1.0)
+    widget.end_setup_move(now=2.0)
+
+    widget.start_setup_move(now=3.0)
+
+    assert widget.setup_move is not None
+    assert widget.setup_move.recording
+
+
+def test_undo_and_redo_edit_a_live_setup_move(widget) -> None:
+    command = TurnCommand(HexCoordinate(0, 0), TurnDirection.CLOCKWISE)
+    widget.start_setup_move(now=1.0)
+    widget._perform_new_turn(command)
+    _finish_turns(widget)
+
+    widget.undo(now=2.0)
+    _finish_turns(widget)
+    assert widget.setup_move is not None
+    assert widget.setup_move.commands == ()
+
+    widget.redo(now=3.0)
+    _finish_turns(widget)
+    assert widget.setup_move.commands == (command,)
+
+
+def test_loaded_live_setup_recording_can_continue_and_unwind(widget) -> None:
+    first = TurnCommand(HexCoordinate(0, 0), TurnDirection.CLOCKWISE)
+    second = TurnCommand(HexCoordinate(1, 0), TurnDirection.COUNTERCLOCKWISE)
+    saved_board = PeriodicBoard()
+    saved_board.turn(first.coordinate, first.direction)
+    state = GameState.capture(
+        saved_board,
+        game_active=False,
+        move_count=0,
+        setup_move=SetupMove((first,), recording=True),
+    )
+
+    widget.restore_game_state(state)
+    widget._perform_new_turn(second)
+    _finish_turns(widget)
+    assert widget.setup_move is not None
+    assert widget.setup_move.commands == (first, second)
+
+    widget.unwind_setup_move(now=2.0)
+    _finish_turns(widget)
+    assert widget.board.is_solved()
