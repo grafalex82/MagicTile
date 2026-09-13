@@ -4,7 +4,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PyQt6.QtCore import QPoint, Qt
-from PyQt6.QtGui import QColor, QImage, QKeyEvent, QPainter
+from PyQt6.QtGui import QAction, QColor, QImage, QKeyEvent, QKeySequence, QPainter
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtTest import QTest
 
@@ -193,6 +193,108 @@ def test_escape_does_not_close_the_window(application) -> None:
     window.board_widget.keyPressEvent(event)
 
     assert window.isVisible()
+    window.close()
+
+
+def test_main_menu_has_requested_structure_and_disabled_future_commands(application) -> None:
+    window = GameWindow(Settings())
+    window.board_widget._frame_timer.stop()
+
+    assert [action.text() for action in window.menuBar().actions()] == ["File", "Puzzle", "Macro"]
+    assert [action.text() for action in window.file_menu.actions()] == [
+        "Open",
+        "Save",
+        "Save As",
+        "",
+        "Quit",
+    ]
+    assert [action.text() for action in window.puzzle_menu.actions()] == [
+        "Reset",
+        "Scrumble",
+        "",
+        "Undo",
+        "Redo",
+    ]
+    assert [action.text() for action in window.macro_menu.actions()] == [
+        "Record",
+        "Play",
+        "",
+        "Start Setup Move",
+        "End Setup Move",
+        "Unwind Setup Move",
+    ]
+    assert [action.text() for action in window.record_menu.actions()] == [
+        *(f"Macro {slot}" for slot in "1234567890"),
+    ]
+    assert [action.text() for action in window.play_menu.actions()] == [
+        *(f"Macro {slot}" for slot in "1234567890"),
+        "",
+        *(f"Macro {slot} (Reverse)" for slot in "1234567890"),
+    ]
+    assert window.quit_action.menuRole() is QAction.MenuRole.QuitRole
+    assert not window.open_action.isEnabled()
+    assert not window.reset_action.isEnabled()
+    assert not window.start_setup_move_action.isEnabled()
+
+    window.close()
+
+
+def test_main_menu_actions_use_existing_board_commands(application) -> None:
+    window = GameWindow(Settings(turn_animation_duration_seconds=0.001))
+    window.board_widget._frame_timer.stop()
+    original = window.board_widget.board.sticker_state()
+    command = TurnCommand(HexCoordinate(0, 0), TurnDirection.CLOCKWISE)
+    window.board_widget._perform_new_turn(command)
+    _finish_turns(window.board_widget)
+
+    window.undo_action.trigger()
+
+    assert window.board_widget.board.sticker_state() == original
+    _finish_turns(window.board_widget)
+
+    window.redo_action.trigger()
+
+    assert window.board_widget.board.sticker_state() != original
+    _finish_turns(window.board_widget)
+
+    window.record_actions[4].trigger()
+
+    assert window.board_widget.macro_recording is not None
+    assert window.board_widget.macro_recording.slot == 4
+    window.close()
+
+
+def test_reverse_macro_menu_action_uses_inverse_turns(application) -> None:
+    settings = Settings(turn_animation_duration_seconds=0.001).with_macro(0, parse_macro("1"))
+    window = GameWindow(settings)
+    window.board_widget._frame_timer.stop()
+    coordinate = HexCoordinate(0, 0)
+    window.board_widget.macro_selection.add(window.board_widget.board, coordinate)
+    expected = PeriodicBoard()
+    expected.turn(coordinate, TurnDirection.COUNTERCLOCKWISE)
+
+    window.reverse_play_actions[0].trigger()
+
+    assert window.board_widget.board.sticker_state() == expected.sticker_state()
+    assert window.reverse_play_actions[0].shortcut() == QKeySequence("Shift+0")
+    window.close()
+
+
+def test_shift_digit_shortcut_triggers_reverse_macro_action(application) -> None:
+    settings = Settings(turn_animation_duration_seconds=0.001).with_macro(3, parse_macro("1"))
+    window = GameWindow(settings)
+    window.board_widget._frame_timer.stop()
+    window.show()
+    window.board_widget.setFocus()
+    application.processEvents()
+    coordinate = HexCoordinate(0, 0)
+    window.board_widget.macro_selection.add(window.board_widget.board, coordinate)
+    expected = PeriodicBoard()
+    expected.turn(coordinate, TurnDirection.COUNTERCLOCKWISE)
+
+    QTest.keyClick(window.board_widget, Qt.Key.Key_3, Qt.KeyboardModifier.ShiftModifier)
+
+    assert window.board_widget.board.sticker_state() == expected.sticker_state()
     window.close()
 
 

@@ -8,7 +8,16 @@ from collections import deque
 from dataclasses import dataclass
 
 from PyQt6.QtCore import QTimer, Qt
-from PyQt6.QtGui import QEnterEvent, QKeyEvent, QMouseEvent, QPaintEvent, QPainter, QWheelEvent
+from PyQt6.QtGui import (
+    QAction,
+    QEnterEvent,
+    QKeyEvent,
+    QKeySequence,
+    QMouseEvent,
+    QPaintEvent,
+    QPainter,
+    QWheelEvent,
+)
 from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget
 
 from magic_tile.domain import HexCoordinate, PeriodicBoard, TurnDirection
@@ -30,6 +39,7 @@ from magic_tile.ui.turn_animation import TurnAnimation
 WINDOW_SIZE = (1280, 750)
 WINDOW_TITLE = "MagicTile"
 PAN_START_DISTANCE_PX = 5
+MACRO_MENU_SLOT_ORDER = (*range(1, 10), 0)
 
 
 def _left_drag_started(button_down_at: tuple[int, int], current_position: tuple[int, int]) -> bool:
@@ -257,35 +267,68 @@ class GameBoardWidget(QWidget):
             event.accept()
             return
 
-        # Translate digits and history shortcuts into macro actions or a turn
-        # command that can use the shared animation path below.
+        # Translate digits and history shortcuts into the same commands used
+        # by the main-menu actions.
         digit = _digit_from_key(key)
-        command: TurnCommand | None = None
         if digit is not None and control_pressed:
-            self._begin_recording(digit, now)
+            self.record_macro(digit, now=now)
         elif digit is not None:
-            self._play_macro(digit, reverse=shift_pressed, now=now)
+            self.play_macro(digit, reverse=shift_pressed, now=now)
         elif control_pressed and key == Qt.Key.Key_Z:
             if shift_pressed:
-                command = self.turn_history.redo()
+                self.redo(now=now)
             else:
-                minimum = self.recording_history.position if self.recording_history is not None else 0
-                command = self.turn_history.undo(minimum)
+                self.undo(now=now)
         elif control_pressed and key == Qt.Key.Key_Y:
-            command = self.turn_history.redo()
+            self.redo(now=now)
         else:
             super().keyPressEvent(event)
             return
 
-        # Animate an undo/redo command after synchronizing any live recording.
+        # Consume every recognized shortcut, including a temporarily blocked
+        # command or an empty macro slot.
+        event.accept()
+
+    def undo(self, *, now: float | None = None) -> None:
+        """Undo one turn through the shared animated history path."""
+        if self.animation is not None or self.playback_active:
+            return
+        minimum = self.recording_history.position if self.recording_history is not None else 0
+        self._apply_history_command(self.turn_history.undo(minimum), now)
+
+    def redo(self, *, now: float | None = None) -> None:
+        """Redo one turn through the shared animated history path."""
+        if self.animation is not None or self.playback_active:
+            return
+        self._apply_history_command(self.turn_history.redo(), now)
+
+    def record_macro(self, slot: int, *, now: float | None = None) -> None:
+        """Begin recording a macro slot, if board input is currently available."""
+        if self.animation is not None or self.playback_active:
+            return
+        self._begin_recording(slot, time.monotonic() if now is None else now)
+        self.update()
+
+    def play_macro(
+        self,
+        slot: int,
+        *,
+        reverse: bool = False,
+        now: float | None = None,
+    ) -> None:
+        """Play a macro slot, if board input is currently available."""
+        if self.animation is not None or self.playback_active:
+            return
+        self._play_macro(slot, reverse=reverse, now=time.monotonic() if now is None else now)
+        self.update()
+
+    def _apply_history_command(self, command: TurnCommand | None, now: float | None) -> None:
+        """Animate a command returned by undo or redo and refresh recording state."""
         if command is not None:
             self.macro_selection.clear()
             self._synchronize_recording()
-            self._begin_animation(command, now)
-
-        # Reflect non-command macro state changes and consume the handled key.
+            self._begin_animation(command, time.monotonic() if now is None else now)
         self.update()
-        event.accept()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt virtual method
         """Start a pan/select gesture or perform a clockwise turn."""
@@ -512,7 +555,110 @@ class GameWindow(QMainWindow):
         self.setWindowTitle(WINDOW_TITLE)
         self.board_widget = GameBoardWidget(settings, self)
         self.setCentralWidget(self.board_widget)
+        self._create_actions()
+        self._create_main_menu()
         self.resize(*WINDOW_SIZE)
+
+    def _create_actions(self) -> None:
+        """Create reusable application commands for the menu and shortcuts."""
+        self.open_action = self._unavailable_action("Open", QKeySequence.StandardKey.Open)
+        self.save_action = self._unavailable_action("Save", QKeySequence.StandardKey.Save)
+        self.save_as_action = self._unavailable_action("Save As", QKeySequence.StandardKey.SaveAs)
+
+        self.quit_action = QAction("Quit", self)
+        self.quit_action.setObjectName("quit_action")
+        self.quit_action.setShortcuts(QKeySequence.StandardKey.Quit)
+        self.quit_action.setMenuRole(QAction.MenuRole.QuitRole)
+        self.quit_action.triggered.connect(QApplication.quit)
+
+        self.reset_action = self._unavailable_action("Reset")
+        self.scrumble_action = self._unavailable_action("Scrumble")
+
+        self.undo_action = QAction("Undo", self)
+        self.undo_action.setObjectName("undo_action")
+        self.undo_action.setShortcuts(QKeySequence.StandardKey.Undo)
+        self.undo_action.triggered.connect(self.board_widget.undo)
+
+        self.redo_action = QAction("Redo", self)
+        self.redo_action.setObjectName("redo_action")
+        self.redo_action.setShortcuts(QKeySequence.StandardKey.Redo)
+        self.redo_action.triggered.connect(self.board_widget.redo)
+
+        self.record_actions = tuple(self._macro_action("Record", slot) for slot in range(10))
+        self.play_actions = tuple(self._macro_action("Play", slot) for slot in range(10))
+        self.reverse_play_actions = tuple(
+            self._macro_action("Play", slot, reverse=True) for slot in range(10)
+        )
+
+        self.start_setup_move_action = self._unavailable_action("Start Setup Move")
+        self.end_setup_move_action = self._unavailable_action("End Setup Move")
+        self.unwind_setup_move_action = self._unavailable_action("Unwind Setup Move")
+
+    def _unavailable_action(
+        self,
+        text: str,
+        shortcut: QKeySequence.StandardKey | None = None,
+    ) -> QAction:
+        """Create a disabled placeholder for a command planned but not implemented."""
+        action = QAction(text, self)
+        action.setObjectName(f"{text.lower().replace(' ', '_')}_action")
+        if shortcut is not None:
+            action.setShortcuts(shortcut)
+        action.setEnabled(False)
+        return action
+
+    def _macro_action(self, operation: str, slot: int, *, reverse: bool = False) -> QAction:
+        """Create one macro-slot action and bind its existing keyboard shortcut."""
+        text = f"Macro {slot}"
+        action = QAction(f"{text} (Reverse)" if reverse else text, self)
+        direction_name = "reverse_" if reverse else ""
+        action.setObjectName(f"macro_{operation.lower()}_{direction_name}{slot}_action")
+        if operation == "Record":
+            action.setShortcut(QKeySequence(f"Ctrl+{slot}"))
+            action.triggered.connect(
+                lambda checked=False, selected_slot=slot: self.board_widget.record_macro(selected_slot),
+            )
+        else:
+            shortcut = f"Shift+{slot}" if reverse else str(slot)
+            action.setShortcut(QKeySequence(shortcut))
+            action.triggered.connect(
+                lambda checked=False, selected_slot=slot, play_reverse=reverse: (
+                    self.board_widget.play_macro(selected_slot, reverse=play_reverse)
+                ),
+            )
+        return action
+
+    def _create_main_menu(self) -> None:
+        """Build the requested top-level menu hierarchy."""
+        menu_bar = self.menuBar()
+
+        self.file_menu = menu_bar.addMenu("File")
+        self.file_menu.addActions((self.open_action, self.save_action, self.save_as_action))
+        self.file_menu.addSeparator()
+        self.file_menu.addAction(self.quit_action)
+
+        self.puzzle_menu = menu_bar.addMenu("Puzzle")
+        self.puzzle_menu.addActions((self.reset_action, self.scrumble_action))
+        self.puzzle_menu.addSeparator()
+        self.puzzle_menu.addActions((self.undo_action, self.redo_action))
+
+        self.macro_menu = menu_bar.addMenu("Macro")
+        self.record_menu = self.macro_menu.addMenu("Record")
+        self.record_menu.addActions(tuple(self.record_actions[slot] for slot in MACRO_MENU_SLOT_ORDER))
+        self.play_menu = self.macro_menu.addMenu("Play")
+        self.play_menu.addActions(tuple(self.play_actions[slot] for slot in MACRO_MENU_SLOT_ORDER))
+        self.play_menu.addSeparator()
+        self.play_menu.addActions(
+            tuple(self.reverse_play_actions[slot] for slot in MACRO_MENU_SLOT_ORDER),
+        )
+        self.macro_menu.addSeparator()
+        self.macro_menu.addActions(
+            (
+                self.start_setup_move_action,
+                self.end_setup_move_action,
+                self.unwind_setup_move_action,
+            ),
+        )
 
 
 def run(settings: Settings) -> int:
