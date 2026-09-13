@@ -1,1 +1,1 @@
-"""Pygame rendering, animation, menus, and camera controls."""
+"""PyQt6 rendering, animation, menus, and camera controls."""

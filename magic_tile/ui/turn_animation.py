@@ -18,7 +18,6 @@ class TurnAnimation:
     started_at: float
     source_colors: dict[tuple[Face, str, int], FaceColor]
     duration_seconds: float
-    render_cache: object | None = field(default=None, repr=False, compare=False)
     completion_frame_shown: bool = field(default=False, repr=False, compare=False)
 
     @classmethod
@@ -57,7 +56,7 @@ class TurnAnimation:
         progress = self.progress(now)
         eased = 0.5 - math.cos(math.pi * progress) / 2
         # Positive mathematical rotation appears clockwise in screen
-        # coordinates because pygame's y axis points down.
+        # coordinates because Qt's y axis points down.
         return -60.0 * int(self.direction) * eased
 
     def is_finished(self, now: float) -> bool:

@@ -39,7 +39,7 @@ MagicTile/
 │   ├── domain/              # Board model, pieces, and moves
 │   ├── input/               # Mouse, keyboard, and macros
 │   ├── persistence/         # Saving and loading
-│   └── ui/                  # Pygame, camera, rendering, and menus
+│   └── ui/                  # PyQt6 widgets, camera, rendering, and menus
 └── tests/                   # Automated tests
 ```
 
@@ -52,7 +52,7 @@ contain repeated colors with different local neighborhoods.
 ## Requirements
 
 - Python 3.11 or newer
-- pygame
+- PyQt6
 - pytest for development
 
 `pyenv` is not required. Dependencies are listed in `requirements.txt`, and the
@@ -72,7 +72,7 @@ Install or update the dependencies when needed:
 python -m pip install -r requirements.txt
 ```
 
-The prototype displays a resizable pygame window with a periodically coloured
+The prototype displays a resizable PyQt6 window with a periodically coloured
 flat-top hexagonal grid. Every hexagon is 200 pixels high. Left-click a face to
 turn every copy of that logical face counterclockwise; right-click to turn it
 clockwise. A turn lasts for the configured duration and locks other board

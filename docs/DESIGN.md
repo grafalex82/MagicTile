@@ -76,7 +76,7 @@ will be determined later.
 
 ## Architectural boundaries
 
-- `domain` has no dependency on Pygame. It contains coordinates, pieces,
+- `domain` has no dependency on PyQt6. It contains coordinates, pieces,
   permutations, move history, and solved-state validation.
 - `ui` renders the model and manages the camera and animation.
 - `input` translates mouse and keyboard events into commands and owns macro and
@@ -146,32 +146,15 @@ through `PeriodicBoard.face_at()`.
 ### Static hexagons
 
 `_draw_faces()` obtains `Face.color`, `Face.edge_colors`, and
-`Face.corner_colors` for every visible cell. `_render_curved_face()` then
-composes one transparent face surface from the masks stored in
-`_CurvedFaceGeometry`.
-
-The geometry is generated at twice the requested resolution and downscaled at
-the end for antialiasing. It consists of:
-
-- `hex_mask`, which covers the whole hexagon and is initially filled with the
-  face's fixed center color;
-- `edge_masks[i]`, the part of the hexagon covered by exactly neighboring
-  circle `i`;
-- `corner_masks[i]`, the intersection of neighboring circles `i` and
-  `(i + 1) % 6` inside the hexagon;
-- `boundaries`, a transparent overlay containing the six circular dividing
-  arcs and the outer hexagon border.
+`Face.corner_colors` for every visible cell. The color-independent contours in
+`_CellGeometry` are cached by pixel height. `QPainter` fills the center polygon,
+the six circle-clipped edge polygons, and the six consecutive-circle corner
+lenses before drawing the dividing arcs and outer border.
 
 The edge and corner indices match the cyclic indices in the domain model.
-Colors are applied in the order center, edges, corners, and finally boundary
-lines. Thus the static edge and corner regions are cut from circle masks rather
-than defined as hand-authored polygon shapes. The resulting supersampled image
-is smoothly reduced to its display size and blitted with its center aligned to
-the cell's `screen_center`.
-
-Both the color-composed face surface and its color-independent geometry are
-cached. Faces with the same dimensions, line widths, and colors therefore do
-not need to be reconstructed on every frame.
+Qt's antialiased vector painting keeps the geometry smooth at every camera
+zoom. A completed image of each distinct logical face is cached and reused for
+all of its periodic copies, avoiding repeated vector construction.
 
 ### Starting a turn
 
@@ -182,36 +165,27 @@ exact final permutation to the model.
 The model has no intermediate animation state: the transition exists only in
 the view.
 
-The first animation frame creates a `_TurnRenderCache`. Its `background` is a
-complete static rendering of the board in the final model state, while
-`centers` pairs each turning face reference with the screen-pixel center of
-every visible cell resolving to that object. The cache is keyed by window size,
-camera offset, and zoom. It is rebuilt after a resize, pan, or zoom; otherwise
-its background is restored before every frame so no pixels from the preceding
-frame remain.
+The widget caches the complete static board for its viewport. Starting a turn
+reuses the already visible pre-turn background because every changed sticker is
+covered by the animated disk. The background is refreshed after the animation,
+between queued turns, or after resize, pan, and zoom. This keeps the first
+animated frame responsive without retaining stale pixels after completion.
 
 ### Animated turn disk
 
-`_render_turn_frame()` procedurally rasterizes the moving region for the
-current angle. It does not rotate a previously rendered bitmap. The frame
-contains the selected cell and its six neighbors, whose unrotated contours are
-cached as seven `_TurnCellGeometry` instances.
+The animated layer contains the selected cell and its six neighbors, whose
+unrotated contours are cached as seven `_CellGeometry` instances.
 
-Each `_TurnCellGeometry` stores an outer hexagon in `vertices`, six edge-region
+Each `_CellGeometry` stores an outer hexagon in `vertices`, six edge-region
 contours in `edges`, and six corner-region contours in `corners`. Its points are
 expressed relative to the selected cell's center, which is the shared rotation
 origin. Edge contours are hexagons clipped by the corresponding neighboring
 circles; corner contours are clipped circle lenses. The circular arcs are
-densely sampled into polygon contours because Pygame must transform their
-individual points on every frame.
+densely sampled into polygon contours and transformed by `QPainter` on every
+frame.
 
-For angle `a`, every contour point is rotated and translated to the turn-frame
-center using:
-
-```text
-x' = center_x + x * cos(a) - y * sin(a)
-y' = center_y + x * sin(a) + y * cos(a)
-```
+For angle `a`, the painter is translated to each visible occurrence of the
+logical face and rotated around that occurrence's center.
 
 This transforms the selected center region, its edge and corner regions, the
 adjoining regions of all six neighbors, and their dividing lines together.
@@ -224,19 +198,18 @@ outside the move use their current model colors. At exactly 60 degrees the old
 colors have arrived at the positions already stored in the model, allowing the
 animated layer to disappear without a visual jump.
 
-After rasterization, a circular alpha mask removes every pixel outside the
-turn disk. At zoom levels below 100%, the disk is first rendered at 100% and
-then smoothly reduced to the exact target radius before the circular mask is
-reapplied. This keeps small-scale lines and curves stable. A turn frame is
-produced from each face object's own stored neighborhood and centered on all
-matching entries in `_TurnRenderCache.centers`, making periodic copies and
-same-colored turn groups animate synchronously.
+An antialiased image mask clips the animated layer to a pixel-aligned circular
+turn disk. The black turn boundary and red guide are drawn above its edge to
+hide sampling seams between moving and stationary geometry. A frame is produced
+from each face object's own stored neighborhood at all matching visible
+coordinates, making periodic copies and same-colored turn groups animate
+synchronously.
 
 The final layer order is:
 
 1. black window background;
-2. static board or cached animation background;
-3. procedurally rendered turn disk;
+2. static board in its completed model state;
+3. vector-rendered, circularly clipped turn layer;
 4. red turn-guide highlight.
 
 Drawing the highlight last keeps it visible above the moving disk for the

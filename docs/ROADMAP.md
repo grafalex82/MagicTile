@@ -23,7 +23,7 @@ Key invariants: a move followed by its inverse restores the original state; six
 
 ## 2. Graphics prototype
 
-- Pygame window and main loop.
+- PyQt6 window and event loop.
 - Rendering of the repeating hexagonal board.
 - Camera panning and zooming.
 - Mouse face selection and turn animation.

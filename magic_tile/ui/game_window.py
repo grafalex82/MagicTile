@@ -1,61 +1,34 @@
-"""Pygame window, board rendering, input, and face-turn animation."""
+"""PyQt6 window, input handling, and orchestration for MagicTile."""
 
 from __future__ import annotations
 
-import math
+import sys
 import time
 from collections import deque
 from dataclasses import dataclass
-from functools import lru_cache
 
-import pygame
-import pygame.gfxdraw
+from PyQt6.QtCore import QTimer, Qt
+from PyQt6.QtGui import QEnterEvent, QKeyEvent, QMouseEvent, QPaintEvent, QPainter, QWheelEvent
+from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget
 
-from magic_tile.domain import (
-    BOARD,
-    Face,
-    FaceColor,
-    HexCoordinate,
-    PeriodicBoard,
-    TurnDirection,
-)
-from magic_tile.input import (
-    MacroRecording,
-    MacroSelection,
-    TurnCommand,
-    TurnHistory,
-    TurnHistorySnapshot,
-)
+from magic_tile.domain import HexCoordinate, PeriodicBoard, TurnDirection
+from magic_tile.input import MacroRecording, MacroSelection, TurnCommand, TurnHistory, TurnHistorySnapshot
 from magic_tile.persistence import Settings, save_settings
 from magic_tile.ui.camera import Camera
-from magic_tile.ui.hex_grid import (
-    HEX_HEIGHT,
-    hex_at_point,
-    hex_center,
-    hex_vertices,
-    visible_hexes,
+from magic_tile.ui.hex_grid import HEX_HEIGHT, hex_at_point
+from magic_tile.ui.qt_renderer import (
+    MACRO_HIGHLIGHT_COLOR,
+    TURN_GUIDE_HIGHLIGHT_COLOR,
+    draw_board,
+    draw_recording_panel,
+    draw_status_message,
+    render_board,
+    render_static_board,
 )
 from magic_tile.ui.turn_animation import TurnAnimation
 
-WINDOW_SIZE = (1280, 800)
+WINDOW_SIZE = (1280, 750)
 WINDOW_TITLE = "MagicTile"
-
-BACKGROUND = pygame.Color("#000000")
-GRID_COLOR = pygame.Color("#000000")
-GRID_WIDTH = 10
-PIECE_GRID_WIDTH = 3
-TURN_GUIDE_HIGHLIGHT_COLOR = pygame.Color("#ff4040")
-TURN_GUIDE_HIGHLIGHT_WIDTH = 2
-MACRO_HIGHLIGHT_COLOR = pygame.Color("#37e46f")
-MACRO_HIGHLIGHT_WIDTH = 3
-PANEL_BACKGROUND = pygame.Color(15, 15, 18, 220)
-PANEL_TEXT = pygame.Color("#ffffff")
-ERROR_BACKGROUND = pygame.Color(150, 28, 28, 235)
-INFO_BACKGROUND = pygame.Color(24, 92, 48, 235)
-# The hover indicator reaches beyond every corner and into the moving ring.
-TURN_GUIDE_DIAMETER_SCALE = 1.55
-# A left-button movement must pass this distance on either screen axis before
-# it becomes a camera drag instead of a face turn.
 PAN_START_DISTANCE_PX = 5
 
 
@@ -67,29 +40,13 @@ def _left_drag_started(button_down_at: tuple[int, int], current_position: tuple[
     )
 
 
-@dataclass(slots=True)
-class _TurnRenderCache:
-    """Screen-space data reused while one logical face is turning.
-
-    One logical face occurs at several coordinates on the periodic board, so a
-    each turning face is mapped to every visible coordinate resolving to that
-    object. ``centers`` stores the face reference with each destination.
-
-    ``key`` maps the cached data to the viewport state in which it was created:
-    ``(surface_size, camera_offset, zoom)``. A resize, pan, or zoom produces a
-    different key and forces the background and centers to be calculated again.
-
-    ``background`` is the complete, non-animated board image for that viewport.
-    It is restored before every animation frame so pixels drawn during the
-    preceding frame cannot remain on screen.
-    """
-
-    # ((viewport width, height), (camera x, y), camera zoom)
-    key: tuple[tuple[int, int], tuple[float, float], float]
-    # Static full-window image matching ``key``.
-    background: pygame.Surface
-    # Logical face object and screen center for every animated occurrence.
-    centers: tuple[tuple[Face, tuple[int, int]], ...]
+def _digit_from_key(key: int | Qt.Key) -> int | None:
+    """Map number-row and keypad digit keys to a macro slot."""
+    value = key.value if isinstance(key, Qt.Key) else int(key)
+    zero = Qt.Key.Key_0.value
+    if zero <= value <= Qt.Key.Key_9.value:
+        return value - zero
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,1001 +57,472 @@ class _QueuedTurn:
     record_history: bool
 
 
-@dataclass(slots=True)
-class _CurvedFaceGeometry:
-    """Precomputed masks and strokes used to render one static face.
+class GameBoardWidget(QWidget):
+    """Interactive Qt widget containing the board and all game UI state."""
 
-    The geometry is built at twice the requested resolution for antialiasing;
-    all masks and ``boundaries`` therefore use the high-resolution ``size``.
-    After the masks have been filled with model colors, the composed surface is
-    downscaled to ``final_size`` for display.
+    def __init__(
+        self,
+        settings: Settings,
+        parent: QWidget | None = None,
+        *,
+        board: PeriodicBoard | None = None,
+    ) -> None:
+        super().__init__(parent)
 
-    ``hex_mask`` maps to the complete hexagonal cell and supplies its base,
-    center color. ``edge_masks[i]`` maps to the part of that hexagon covered by
-    exactly neighboring circle ``i``. ``corner_masks[i]`` maps to the part
-    covered by neighboring circles ``i`` and ``(i + 1) % 6``. These indices are
-    the same indices used by ``Face.edge_colors`` and ``Face.corner_colors``.
+        # Create the persistent game services and the board being displayed.
+        self.settings = settings
+        self.board = PeriodicBoard() if board is None else board
+        self.camera = Camera()
+        self.turn_history = TurnHistory()
 
-    ``boundaries`` contains only the transparent overlay of six circular
-    dividing arcs and the outer hexagon border. It is drawn after all color
-    masks, keeping line widths and joins independent of the fill order.
-    """
+        # Initialize macro recording, selection, and queued-playback state.
+        self.macro_selection = MacroSelection()
+        self.macro_recording: MacroRecording | None = None
+        self.recording_history: TurnHistorySnapshot | None = None
+        self.turn_queue: deque[_QueuedTurn] = deque()
+        self.playback_active = False
 
-    # High-resolution (width, height), including padding for boundary strokes.
-    size: tuple[int, int]
-    # Display size after the supersampled composition is downscaled.
-    final_size: tuple[int, int]
-    # Entire hexagonal fill region, initially painted with Face.color.
-    hex_mask: pygame.mask.Mask
-    # Six single-circle regions, mapped by index to Face.edge_colors.
-    edge_masks: tuple[pygame.mask.Mask, ...]
-    # Six consecutive-circle intersections, mapped to Face.corner_colors.
-    corner_masks: tuple[pygame.mask.Mask, ...]
-    # Transparent high-resolution surface containing all dividing lines.
-    boundaries: pygame.Surface
+        # Track the current pointer gesture and active turn animation.
+        self.panning = False
+        self.left_button_down_at: tuple[int, int] | None = None
+        self.left_button_selecting = False
+        self.animation: TurnAnimation | None = None
 
+        # Keep transient status and pointer information used by the overlay.
+        self.status_message: str | None = None
+        self.status_is_error = False
+        self.status_until = 0.0
+        self.mouse_inside = False
+        self.mouse_position = (0, 0)
 
-@dataclass(slots=True)
-class _TurnCellGeometry:
-    """Unrotated vector contours for one cell inside a moving turn disk.
+        # Retain the expensive static board layer until its inputs change.
+        self._static_cache_view_key = None
+        self._static_cache_state = None
+        self._static_cache = None
+        self._force_static_refresh = False
 
-    One instance describes either the selected cell or one of its six neighbors.
-    Every point is expressed in pixels relative to the selected cell's center,
-    which is the rotation origin. Consequently, contours belonging to neighbor
-    cells are already offset from that origin. For each animation frame,
-    ``_render_turn_frame`` rotates all points by the current angle and then
-    translates them to the center of the output surface.
+        # Configure the widget to receive keyboard and passive mouse events.
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setMouseTracking(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent)
 
-    ``vertices`` is the cell's outer hexagon. ``edges[i]`` is that hexagon
-    clipped by neighboring circle ``i``; ``corners[i]`` is clipped by the lens
-    formed by circles ``i`` and ``(i + 1) % 6``. The tuple indices map directly
-    to ``Face.edge_colors[i]`` and ``Face.corner_colors[i]``. Unlike
-    ``_CurvedFaceGeometry``, this structure stores polygon contours rather than
-    raster masks because its points must be rotated afresh on every frame.
-    """
+        # Drive time-based animation and queue advancement at roughly 60 Hz.
+        self._frame_timer = QTimer(self)
+        self._frame_timer.setInterval(16)
+        self._frame_timer.timeout.connect(self.advance)
+        self._frame_timer.start()
 
-    # Six outer-hexagon points in turn-origin coordinates.
-    vertices: tuple[tuple[int, int], ...]
-    # Six edge-region polygons, in Face.edge_colors slot order.
-    edges: tuple[tuple[tuple[int, int], ...], ...]
-    # Six corner-region polygons, in Face.corner_colors slot order.
-    corners: tuple[tuple[tuple[int, int], ...], ...]
+    def sizeHint(self):  # noqa: N802 - Qt virtual method
+        """Return the preferred initial board size."""
+        from PyQt6.QtCore import QSize
 
+        return QSize(*WINDOW_SIZE)
 
-def draw_board(
-    surface: pygame.Surface,
-    board: PeriodicBoard = BOARD,
-    camera: Camera | None = None,
-    hovered_coordinate: HexCoordinate | None = None,
-    animation: TurnAnimation | None = None,
-    now: float | None = None,
-    macro_face_numbers: dict[Face, int] | None = None,
-    recording_slot: int | None = None,
-    recording_move_count: int = 0,
-    status_message: str | None = None,
-    status_is_error: bool = False,
-) -> None:
-    """Draw the board using colours supplied by the domain model."""
-    # Clear the previous frame before drawing the current board state.
-    surface.fill(BACKGROUND)
+    def advance(self, now: float | None = None) -> None:
+        """Advance status and turn queues, then schedule a repaint."""
+        # Use an injected timestamp in tests and the monotonic application
+        # clock during normal event-loop updates.
+        current = time.monotonic() if now is None else now
 
-    # Convert the camera state into screen-space dimensions and translation.
-    offset = camera.offset if camera is not None else (0.0, 0.0)
-    zoom = camera.zoom if camera is not None else 1.0
-    hex_height = HEX_HEIGHT * zoom
+        # Remove a temporary status notification after its display interval.
+        if self.status_message is not None and current >= self.status_until:
+            self.status_message = None
 
-    # Materialize the visible cells once because every rendering layer uses them.
-    visible = list(visible_hexes(surface.get_size(), height=hex_height, offset=offset))
+        # Finish the active turn in two phases. The first phase preserves one
+        # exact 60-degree frame; the second releases the animation and marks
+        # the completed static board for rebuilding.
+        if self.animation is not None and self.animation.is_finished(current):
+            if self.animation.completion_frame_shown:
+                self.animation = None
+                self._force_static_refresh = True
+            else:
+                self.animation.completion_frame_shown = True
 
-    piece_width = max(1, round(PIECE_GRID_WIDTH * zoom))
-    cache_key = (surface.get_size(), offset, zoom)
-    cache = animation.render_cache if animation is not None else None
-    if isinstance(cache, _TurnRenderCache) and cache.key == cache_key:
-        surface.blit(cache.background, (0, 0))
-    else:
-        _draw_faces(surface, board, visible, hex_height, zoom, piece_width)
-
-    if animation is not None:
-        _draw_turn_animation(
-            surface,
-            board,
-            visible,
-            camera,
-            animation,
-            time.monotonic() if now is None else now,
-        )
-
-    # Keep the solid outline above the rotating layer. During a turn it follows
-    # the selected logical face rather than the current cursor position.
-    guide_radius = round(hex_height * TURN_GUIDE_DIAMETER_SCALE / 2)
-    if macro_face_numbers:
-        _draw_macro_face_markers(surface, board, visible, guide_radius, macro_face_numbers, zoom)
-
-    highlighted_faces = ()
-    if animation is not None:
-        highlighted_faces = animation.turning_faces
-    elif hovered_coordinate is not None:
-        highlighted_faces = (board.face_at(hovered_coordinate),)
-
-    if highlighted_faces:
-        # pygame draws a circle's stroke inward from its nominal radius.
-        # Place the highlight on the middle of that dividing stroke rather
-        # than on its outer boundary.
-        highlight_radius = round(guide_radius + (TURN_GUIDE_HIGHLIGHT_WIDTH - 1) / 2)
-        for q, r, center in visible:
-            if board.face_at(HexCoordinate(q, r)) in highlighted_faces:
-                pygame.draw.circle(
-                    surface,
-                    TURN_GUIDE_HIGHLIGHT_COLOR,
-                    (round(center[0]), round(center[1])),
-                    highlight_radius,
-                    width=TURN_GUIDE_HIGHLIGHT_WIDTH,
+        # When no turn is running, start the next queued command and record it
+        # when required by its history policy. If the queue is empty, finish
+        # the macro-playback session and unlock normal input.
+        if self.animation is None:
+            if self.turn_queue:
+                queued = self.turn_queue.popleft()
+                if queued.record_history:
+                    self.turn_history.record(queued.command)
+                self.animation = TurnAnimation.begin(
+                    self.board,
+                    queued.command.coordinate,
+                    queued.command.direction,
+                    current,
+                    self.settings.turn_animation_duration_seconds,
                 )
-
-    if recording_slot is not None:
-        _draw_recording_panel(surface, recording_slot, recording_move_count, len(macro_face_numbers or {}))
-    if status_message is not None:
-        _draw_status_message(surface, status_message, status_is_error)
-
-
-def _draw_macro_face_markers(
-    surface: pygame.Surface,
-    board: PeriodicBoard,
-    visible: list[tuple[int, int, tuple[float, float]]],
-    guide_radius: int,
-    face_numbers: dict[Face, int],
-    zoom: float,
-) -> None:
-    """Draw green rings and ordinal labels on every visible logical-face copy."""
-    font = _ui_font(max(22, round(42 * zoom)), bold=True)
-    label_radius = max(15, round(24 * zoom))
-    ring_radius = round(guide_radius + (MACRO_HIGHLIGHT_WIDTH - 1) / 2)
-    for q, r, center in visible:
-        face_number = face_numbers.get(board.face_at(HexCoordinate(q, r)))
-        if face_number is None:
-            continue
-        pixel_center = round(center[0]), round(center[1])
-        pygame.draw.circle(
-            surface,
-            MACRO_HIGHLIGHT_COLOR,
-            pixel_center,
-            ring_radius,
-            width=MACRO_HIGHLIGHT_WIDTH,
-        )
-        pygame.draw.circle(surface, PANEL_BACKGROUND, pixel_center, label_radius)
-        label = font.render(str(face_number), True, MACRO_HIGHLIGHT_COLOR)
-        surface.blit(label, label.get_rect(center=pixel_center))
-
-
-def _draw_recording_panel(surface: pygame.Surface, slot: int, move_count: int, face_count: int) -> None:
-    """Draw an always-visible recording indicator and its controls."""
-    title_font = _ui_font(28, bold=True)
-    detail_font = _ui_font(21)
-    title = title_font.render(f"RECORDING MACRO {slot}", True, PANEL_TEXT)
-    detail = detail_font.render(
-        f"Moves: {move_count}   Faces: {face_count}   Enter: save   Esc: cancel",
-        True,
-        PANEL_TEXT,
-    )
-    width = max(title.get_width(), detail.get_width()) + 52
-    panel = pygame.Surface((width, 82), pygame.SRCALPHA)
-    panel.fill(PANEL_BACKGROUND)
-    pygame.draw.circle(panel, pygame.Color("#ff3b30"), (22, 24), 8)
-    panel.blit(title, (38, 10))
-    panel.blit(detail, (16, 48))
-    surface.blit(panel, (16, 16))
-
-
-def _draw_status_message(surface: pygame.Surface, message: str, is_error: bool) -> None:
-    """Draw a short non-modal result or error message at the bottom center."""
-    font = _ui_font(24, bold=True)
-    label = font.render(message, True, PANEL_TEXT)
-    panel = pygame.Surface((label.get_width() + 32, label.get_height() + 20), pygame.SRCALPHA)
-    panel.fill(ERROR_BACKGROUND if is_error else INFO_BACKGROUND)
-    panel.blit(label, (16, 10))
-    surface.blit(panel, panel.get_rect(midbottom=(surface.get_width() // 2, surface.get_height() - 18)))
-
-
-@lru_cache(maxsize=16)
-def _ui_font(size: int, bold: bool = False) -> pygame.font.Font:
-    """Return a readable cross-platform UI font."""
-    if not pygame.font.get_init():
-        pygame.font.init()
-    return pygame.font.SysFont("arial", size, bold=bold)
-
-
-def _digit_from_key(key: int) -> int | None:
-    """Map number-row and keypad keys to a macro slot."""
-    number_row = {
-        pygame.K_0: 0,
-        pygame.K_1: 1,
-        pygame.K_2: 2,
-        pygame.K_3: 3,
-        pygame.K_4: 4,
-        pygame.K_5: 5,
-        pygame.K_6: 6,
-        pygame.K_7: 7,
-        pygame.K_8: 8,
-        pygame.K_9: 9,
-    }
-    keypad = {
-        pygame.K_KP0: 0,
-        pygame.K_KP1: 1,
-        pygame.K_KP2: 2,
-        pygame.K_KP3: 3,
-        pygame.K_KP4: 4,
-        pygame.K_KP5: 5,
-        pygame.K_KP6: 6,
-        pygame.K_KP7: 7,
-        pygame.K_KP8: 8,
-        pygame.K_KP9: 9,
-    }
-    return number_row.get(key, keypad.get(key))
-
-
-def _draw_faces(
-    surface: pygame.Surface,
-    board: PeriodicBoard,
-    visible: list[tuple[int, int, tuple[float, float]]],
-    hex_height: float,
-    zoom: float,
-    piece_width: int,
-    color_overrides: dict[tuple[Face, str, int], FaceColor] | None = None,
-) -> None:
-    """Draw complete faces from circle-intersection piece geometry."""
-    overrides = color_overrides or {}
-    for q, r, center in visible:
-        face = board.face_at(HexCoordinate(q, r))
-        edge_colors = tuple(
-            overrides.get((face, "edge", index), color) for index, color in enumerate(face.edge_colors)
-        )
-        corner_colors = tuple(
-            overrides.get((face, "corner", index), color) for index, color in enumerate(face.corner_colors)
-        )
-        face_surface = _render_curved_face(
-            max(1, round(hex_height)),
-            face.color,
-            edge_colors,
-            corner_colors,
-            piece_width,
-            max(1, round(GRID_WIDTH * zoom)),
-        )
-        surface.blit(
-            face_surface,
-            face_surface.get_rect(center=(round(center[0]), round(center[1]))),
-        )
-
-
-@lru_cache(maxsize=256)
-def _render_curved_face(
-    height: int,
-    center_color: FaceColor,
-    edge_colors: tuple[FaceColor, ...],
-    corner_colors: tuple[FaceColor, ...],
-    piece_width: int,
-    grid_width: int,
-) -> pygame.Surface:
-    """Render one face whose pieces are bounded by neighboring circles."""
-    geometry = _curved_face_geometry(height, piece_width, grid_width)
-    rendered = pygame.Surface(geometry.size, pygame.SRCALPHA)
-    _blit_mask_color(rendered, geometry.hex_mask, center_color)
-    for mask, color in zip(geometry.edge_masks, edge_colors):
-        _blit_mask_color(rendered, mask, color)
-    for mask, color in zip(geometry.corner_masks, corner_colors):
-        _blit_mask_color(rendered, mask, color)
-    rendered.blit(geometry.boundaries, (0, 0))
-    return pygame.transform.smoothscale(rendered, geometry.final_size)
-
-
-@lru_cache(maxsize=32)
-def _curved_face_geometry(height: int, piece_width: int, grid_width: int) -> _CurvedFaceGeometry:
-    """Build circle-intersection masks once for a size and line width."""
-    supersampling = 2
-    render_height = height * supersampling
-    render_width = round(2 * render_height / 3**0.5)
-    padding = grid_width * supersampling + 4
-    size = (render_width + 2 * padding, render_height + 2 * padding)
-    center = (size[0] // 2, size[1] // 2)
-    vertices = hex_vertices(center, render_height)
-
-    hex_alpha = pygame.Surface(size, pygame.SRCALPHA)
-    pygame.draw.polygon(hex_alpha, (255, 255, 255, 255), vertices)
-    hex_mask = pygame.mask.from_surface(hex_alpha)
-
-    radius = round(render_height * TURN_GUIDE_DIAMETER_SCALE / 2)
-    circle_masks: list[pygame.mask.Mask] = []
-    circle_centers: list[tuple[int, int]] = []
-    for dq, dr in board_directions():
-        offset_x, offset_y = hex_center(dq, dr, render_height)
-        circle_center = (round(center[0] + offset_x), round(center[1] + offset_y))
-        circle_centers.append(circle_center)
-        circle_alpha = pygame.Surface(size, pygame.SRCALPHA)
-        pygame.draw.circle(
-            circle_alpha,
-            (255, 255, 255, 255),
-            circle_center,
-            radius,
-        )
-        circle_masks.append(pygame.mask.from_surface(circle_alpha))
-
-    # Exactly one neighboring circle identifies an edge region. Intersections
-    # of two consecutive circles identify corner regions.
-    edge_masks: list[pygame.mask.Mask] = []
-    for index, circle_mask in enumerate(circle_masks):
-        edge_mask = circle_mask.overlap_mask(hex_mask, (0, 0))
-        for other_index, other_mask in enumerate(circle_masks):
-            if other_index != index:
-                edge_mask.erase(other_mask, (0, 0))
-        edge_masks.append(edge_mask)
-
-    corner_masks: list[pygame.mask.Mask] = []
-    for index, first_mask in enumerate(circle_masks):
-        second_mask = circle_masks[(index + 1) % 6]
-        corner_mask = first_mask.overlap_mask(second_mask, (0, 0))
-        corner_mask = corner_mask.overlap_mask(hex_mask, (0, 0))
-        corner_masks.append(corner_mask)
-
-    # Every internal boundary is an actual circle arc. Draw the six defining
-    # circumferences and clip them to the outer hexagonal cell.
-    boundaries = pygame.Surface(size, pygame.SRCALPHA)
-    boundary_width = max(1, piece_width * supersampling)
-    # pygame.draw.circle grows its stroke inward. Increase its nominal radius
-    # so the stroke center coincides with the geometric circle used by fills
-    # and by the procedural animation.
-    centered_boundary_radius = round(radius + (boundary_width - 1) / 2)
-    for circle_center in circle_centers:
-        pygame.draw.circle(
-            boundaries,
-            GRID_COLOR,
-            circle_center,
-            centered_boundary_radius,
-            width=boundary_width,
-        )
-    boundaries.blit(hex_alpha, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
-    pygame.draw.polygon(
-        boundaries,
-        GRID_COLOR,
-        vertices,
-        width=max(1, grid_width * supersampling),
-    )
-
-    final_size = (
-        max(1, round(size[0] / supersampling)),
-        max(1, round(size[1] / supersampling)),
-    )
-    return _CurvedFaceGeometry(
-        size,
-        final_size,
-        hex_mask,
-        tuple(edge_masks),
-        tuple(corner_masks),
-        boundaries,
-    )
-
-
-def _blit_mask_color(surface: pygame.Surface, mask: pygame.mask.Mask, color: FaceColor) -> None:
-    """Fill one precomputed geometric mask with a model color."""
-    mask.to_surface(
-        surface=surface,
-        setcolor=(*color.rgb, 255),
-        unsetcolor=None,
-    )
-
-
-def board_directions() -> tuple[tuple[int, int], ...]:
-    """Expose the model's shared slot order to cached rendering."""
-    return PeriodicBoard.NEIGHBOUR_DIRECTIONS
-
-
-def _draw_turn_animation(
-    surface: pygame.Surface,
-    board: PeriodicBoard,
-    visible: list[tuple[int, int, tuple[float, float]]],
-    camera: Camera | None,
-    animation: TurnAnimation,
-    now: float,
-) -> None:
-    """Rotate anti-aliased circular snapshots of every matching face copy."""
-    offset = camera.offset if camera is not None else (0.0, 0.0)
-    zoom = camera.zoom if camera is not None else 1.0
-    radius = _turn_circle_radius(zoom)
-    cache_key = (surface.get_size(), offset, zoom)
-    cache = animation.render_cache
-    if not isinstance(cache, _TurnRenderCache) or cache.key != cache_key:
-        cache = _prepare_turn_cache(
-            surface,
-            board,
-            visible,
-            animation,
-            cache_key,
-        )
-        animation.render_cache = cache
-
-    render_zoom = max(1.0, zoom)
-    source_radius = _turn_circle_radius(render_zoom)
-    turn_frames: dict[Face, pygame.Surface] = {}
-    for face, turn_center in cache.centers:
-        turn_frame = turn_frames.get(face)
-        if turn_frame is None:
-            turn_frame = _render_turn_frame(
-                animation,
-                face,
-                animation.angle_degrees(now),
-                render_zoom,
-            )
-            turn_frame = _scale_turn_frame(turn_frame, source_radius, radius)
-            turn_frames[face] = turn_frame
-        surface.blit(turn_frame, turn_frame.get_rect(center=turn_center))
-
-
-def _prepare_turn_cache(
-    surface: pygame.Surface,
-    board: PeriodicBoard,
-    visible: list[tuple[int, int, tuple[float, float]]],
-    animation: TurnAnimation,
-    cache_key: tuple[tuple[int, int], tuple[float, float], float],
-) -> _TurnRenderCache:
-    """Collect periodic target centers and retain the completed background."""
-    turning_faces = set(animation.turning_faces)
-    centers: list[tuple[Face, tuple[int, int]]] = []
-    for q, r, turn_center in visible:
-        face = board.face_at(HexCoordinate(q, r))
-        if face not in turning_faces:
-            continue
-        centers.append((face, (round(turn_center[0]), round(turn_center[1]))))
-    return _TurnRenderCache(cache_key, surface.copy(), tuple(centers))
-
-
-def _render_turn_frame(
-    animation: TurnAnimation,
-    focus: Face,
-    angle_degrees: float,
-    zoom: float,
-) -> pygame.Surface:
-    """Procedurally rasterize one frame from analytic circle intersections."""
-    height = max(1, round(HEX_HEIGHT * zoom))
-    piece_width = max(1, round(PIECE_GRID_WIDTH * zoom))
-    grid_width = max(1, round(GRID_WIDTH * zoom))
-    boundary_radius = round(height * TURN_GUIDE_DIAMETER_SCALE / 2)
-    turn_radius = _turn_circle_radius(zoom)
-    padding = 3
-    size = 2 * (turn_radius + padding) + 1
-    turn_center = (size // 2, size // 2)
-    rendered = pygame.Surface((size, size), pygame.SRCALPHA)
-
-    faces = (focus,) + focus.neighbors
-    angle = math.radians(angle_degrees)
-    cosine = math.cos(angle)
-    sine = math.sin(angle)
-    # 96 segments keep chord error below a quarter pixel even at 250% zoom.
-    cells = _turn_vector_geometry(height)
-
-    def rotated_point(point: tuple[int, int]) -> tuple[int, int]:
-        return (
-            round(turn_center[0] + point[0] * cosine - point[1] * sine),
-            round(turn_center[1] + point[0] * sine + point[1] * cosine),
-        )
-
-    for face, cell in zip(faces, cells):
-        vertices = tuple(rotated_point(point) for point in cell.vertices)
-
-        edge_colors = tuple(
-            animation.source_colors.get((face, "edge", index), color)
-            for index, color in enumerate(face.edge_colors)
-        )
-        corner_colors = tuple(
-            animation.source_colors.get((face, "corner", index), color)
-            for index, color in enumerate(face.corner_colors)
-        )
-        pygame.draw.polygon(rendered, face.color.rgb, vertices)
-
-        edge_polygons: list[list[tuple[int, int]]] = []
-        for index, edge in enumerate(cell.edges):
-            edge_polygon = [rotated_point(point) for point in edge]
-            edge_polygons.append(edge_polygon)
-            if len(edge_polygon) >= 3:
-                pygame.draw.polygon(rendered, edge_colors[index].rgb, edge_polygon)
-
-        corner_polygons: list[list[tuple[int, int]]] = []
-        for index, corner in enumerate(cell.corners):
-            corner_polygon = [rotated_point(point) for point in corner]
-            corner_polygons.append(corner_polygon)
-            if len(corner_polygon) >= 3:
-                pygame.draw.polygon(rendered, corner_colors[index].rgb, corner_polygon)
-
-        for polygon in edge_polygons + corner_polygons:
-            if len(polygon) >= 3:
-                pygame.draw.lines(
-                    rendered,
-                    GRID_COLOR,
-                    True,
-                    polygon,
-                    width=piece_width,
-                )
-        pygame.draw.polygon(
-            rendered,
-            GRID_COLOR,
-            vertices,
-            width=grid_width,
-        )
-
-    rendered.blit(
-        _circular_alpha_mask(turn_radius),
-        (0, 0),
-        special_flags=pygame.BLEND_RGBA_MULT,
-    )
-    return rendered
-
-
-def _turn_circle_radius(zoom: float) -> int:
-    """Return the moving radius at the center of its dividing stroke."""
-    height = HEX_HEIGHT * zoom
-    return round(height * TURN_GUIDE_DIAMETER_SCALE / 2)
-
-
-def _scale_turn_frame(
-    frame: pygame.Surface,
-    source_radius: int,
-    target_radius: int,
-) -> pygame.Surface:
-    """Scale disk contents by radius, independently of transparent padding."""
-    target_size = _circular_alpha_mask(target_radius).get_size()
-    if source_radius == target_radius and frame.get_size() == target_size:
-        return frame
-
-    scale = target_radius / source_radius
-    scaled_size = (
-        max(1, round(frame.get_width() * scale)),
-        max(1, round(frame.get_height() * scale)),
-    )
-    scaled = pygame.transform.smoothscale(frame, scaled_size)
-    result = pygame.Surface(target_size, pygame.SRCALPHA)
-    result.blit(scaled, scaled.get_rect(center=result.get_rect().center))
-    result.blit(
-        _circular_alpha_mask(target_radius),
-        (0, 0),
-        special_flags=pygame.BLEND_RGBA_MULT,
-    )
-    return result
-
-
-@lru_cache(maxsize=32)
-def _turn_vector_geometry(height: int) -> tuple[_TurnCellGeometry, ...]:
-    """Build reusable analytic piece contours for the seven moving cells."""
-    boundary_radius = round(height * TURN_GUIDE_DIAMETER_SCALE / 2)
-    # Chord deviation stays below half a pixel while keeping high-zoom frame
-    # construction within a 60 Hz budget.
-    circle_segments = min(64, max(36, round(boundary_radius * 0.25)))
-    coordinates = ((0, 0),) + PeriodicBoard.NEIGHBOUR_DIRECTIONS
-    cells: list[_TurnCellGeometry] = []
-    for q, r in coordinates:
-        center = hex_center(q, r, height)
-        vertices = tuple(hex_vertices(center, height))
-        neighbor_centers = tuple(
-            (
-                round(hex_center(q + dq, r + dr, height)[0]),
-                round(hex_center(q + dq, r + dr, height)[1]),
-            )
-            for dq, dr in PeriodicBoard.NEIGHBOUR_DIRECTIONS
-        )
-        edges = tuple(
-            tuple(
-                _clip_convex_polygon(
-                    _circle_polygon(
-                        neighbor_center,
-                        boundary_radius,
-                        circle_segments,
-                    ),
-                    vertices,
-                )
-            )
-            for neighbor_center in neighbor_centers
-        )
-        corners = tuple(
-            tuple(
-                _clip_convex_polygon(
-                    _circle_lens_polygon(
-                        neighbor_centers[index],
-                        neighbor_centers[(index + 1) % 6],
-                        boundary_radius,
-                        circle_segments // 3,
-                    ),
-                    vertices,
-                )
-            )
-            for index in range(6)
-        )
-        cells.append(_TurnCellGeometry(vertices, edges, corners))
-    return tuple(cells)
-
-
-def _circle_polygon(center: tuple[int, int], radius: int, segments: int) -> list[tuple[int, int]]:
-    """Approximate a circle densely enough for a smooth filled boundary."""
-    return [
-        (
-            round(center[0] + radius * math.cos(2 * math.pi * index / segments)),
-            round(center[1] + radius * math.sin(2 * math.pi * index / segments)),
-        )
-        for index in range(segments)
-    ]
-
-
-def _circle_lens_polygon(
-    first: tuple[int, int],
-    second: tuple[int, int],
-    radius: int,
-    segments: int,
-) -> list[tuple[int, int]]:
-    """Return the convex lens formed by two equal intersecting circles."""
-    delta_x = second[0] - first[0]
-    delta_y = second[1] - first[1]
-    distance = math.hypot(delta_x, delta_y)
-    if distance == 0 or distance >= 2 * radius:
-        return []
-    half_angle = math.acos(distance / (2 * radius))
-    first_direction = math.atan2(delta_y, delta_x)
-    second_direction = math.atan2(-delta_y, -delta_x)
-    points: list[tuple[int, int]] = []
-    for center, direction in (
-        (first, first_direction),
-        (second, second_direction),
-    ):
-        for index in range(segments + 1):
-            arc_angle = direction - half_angle + 2 * half_angle * index / segments
-            points.append(
-                (
-                    round(center[0] + radius * math.cos(arc_angle)),
-                    round(center[1] + radius * math.sin(arc_angle)),
-                )
-            )
-    midpoint = ((first[0] + second[0]) / 2, (first[1] + second[1]) / 2)
-    return sorted(
-        set(points),
-        key=lambda point: math.atan2(point[1] - midpoint[1], point[0] - midpoint[0]),
-    )
-
-
-def _clip_convex_polygon(
-    subject: list[tuple[int, int]],
-    clip: tuple[tuple[int, int], ...],
-) -> list[tuple[int, int]]:
-    """Clip a polygon to a clockwise convex polygon."""
-    output = [(float(x), float(y)) for x, y in subject]
-    for clip_start, clip_end in zip(clip, clip[1:] + clip[:1]):
-        input_points = output
-        output = []
-        if not input_points:
-            break
-
-        def inside(point: tuple[float, float]) -> bool:
-            return (
-                (clip_end[0] - clip_start[0]) * (point[1] - clip_start[1])
-                - (clip_end[1] - clip_start[1]) * (point[0] - clip_start[0])
-            ) >= 0
-
-        def intersection(first: tuple[float, float], second: tuple[float, float]) -> tuple[float, float]:
-            segment_x = second[0] - first[0]
-            segment_y = second[1] - first[1]
-            clip_x = clip_end[0] - clip_start[0]
-            clip_y = clip_end[1] - clip_start[1]
-            denominator = segment_x * clip_y - segment_y * clip_x
-            if denominator == 0:
-                return second
-            start_x = clip_start[0] - first[0]
-            start_y = clip_start[1] - first[1]
-            amount = (start_x * clip_y - start_y * clip_x) / denominator
-            return first[0] + amount * segment_x, first[1] + amount * segment_y
-
-        previous = input_points[-1]
-        for current in input_points:
-            if inside(current):
-                if not inside(previous):
-                    output.append(intersection(previous, current))
-                output.append(current)
-            elif inside(previous):
-                output.append(intersection(previous, current))
-            previous = current
-    return [(round(x), round(y)) for x, y in output]
-
-
-@lru_cache(maxsize=32)
-def _circular_alpha_mask(radius: int, padding: int = 3) -> pygame.Surface:
-    """Return a reusable smooth mask with no opaque pixels outside the disk."""
-    size = 2 * (radius + padding) + 1
-    circle_center = radius + padding
-    mask = pygame.Surface((size, size), pygame.SRCALPHA)
-    mask.fill((255, 255, 255, 0))
-    pygame.gfxdraw.filled_circle(
-        mask,
-        circle_center,
-        circle_center,
-        radius,
-        (255, 255, 255, 255),
-    )
-    pygame.gfxdraw.aacircle(
-        mask,
-        circle_center,
-        circle_center,
-        radius,
-        (255, 255, 255, 255),
-    )
-    return mask
-
-
-def run(settings: Settings) -> int:
-    """Open the main window and run its event/render loop using *settings*."""
-    pygame.init()
-    _ui_font.cache_clear()
-    try:
-        screen = pygame.display.set_mode(WINDOW_SIZE, pygame.RESIZABLE)
-        pygame.display.set_caption(WINDOW_TITLE)
-        clock = pygame.time.Clock()
-        camera = Camera()
-        board = PeriodicBoard()
-        turn_history = TurnHistory()
-        macro_selection = MacroSelection()
-        macro_recording: MacroRecording | None = None
-        recording_history: TurnHistorySnapshot | None = None
-        turn_queue: deque[_QueuedTurn] = deque()
-        playback_active = False
-        panning = False
-        left_button_down_at: tuple[int, int] | None = None
-        left_button_selecting = False
-        animation: TurnAnimation | None = None
-        status_message: str | None = None
-        status_is_error = False
-        status_until = 0.0
-        mouse_inside = pygame.mouse.get_focused()
-        running = True
-
-        while running:
-            now = time.monotonic()
-            if status_message is not None and now >= status_until:
-                status_message = None
-            if animation is not None and animation.is_finished(now):
-                if animation.completion_frame_shown:
-                    animation = None
-                else:
-                    # Keep one clamped 60-degree frame before switching to
-                    # the separately rasterized final model.
-                    animation.completion_frame_shown = True
-
-            if animation is None:
-                if turn_queue:
-                    queued_turn = turn_queue.popleft()
-                    if queued_turn.record_history:
-                        turn_history.record(queued_turn.command)
-                    animation = TurnAnimation.begin(
-                        board,
-                        queued_turn.command.coordinate,
-                        queued_turn.command.direction,
-                        now,
-                        duration_seconds=settings.turn_animation_duration_seconds,
-                    )
-                elif playback_active:
-                    playback_active = False
-
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    running = False
-                elif event.type == pygame.WINDOWLEAVE:
-                    mouse_inside = False
-                elif event.type == pygame.WINDOWENTER:
-                    mouse_inside = True
-                elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                    if playback_active:
-                        continue
-                    if macro_recording is not None:
-                        turn_queue.extend(
-                            _QueuedTurn(command, record_history=False)
-                            for command in macro_recording.rollback_commands
-                        )
-                        if recording_history is None:
-                            raise RuntimeError("macro recording has no history snapshot")
-                        turn_history.restore(recording_history)
-                        macro_recording = None
-                        recording_history = None
-                        macro_selection.clear()
-                        playback_active = bool(turn_queue)
-                        status_message = "Macro recording canceled"
-                        status_is_error = False
-                        status_until = now + 3.0
-                    elif macro_selection:
-                        macro_selection.clear()
-                        status_message = None
-                    continue
-                elif (
-                    event.type == pygame.KEYDOWN
-                    and event.key in (pygame.K_RETURN, pygame.K_KP_ENTER)
-                    and macro_recording is not None
-                ):
-                    try:
-                        macro = macro_recording.macro
-                    except ValueError:
-                        status_message = "Cannot save an empty macro"
-                        status_is_error = True
-                        status_until = now + 3.0
-                        continue
-                    new_settings = settings.with_macro(macro_recording.slot, macro)
-                    try:
-                        save_settings(new_settings)
-                    except OSError as error:
-                        status_message = f"Could not save macro: {error}"
-                        status_is_error = True
-                        status_until = now + 5.0
-                        continue
-                    saved_slot = macro_recording.slot
-                    settings = new_settings
-                    macro_recording = None
-                    recording_history = None
-                    status_message = f"Macro {saved_slot} saved"
-                    status_is_error = False
-                    status_until = now + 3.0
-                    continue
-                elif animation is not None or playback_active:
-                    # A turn is atomic, and macro playback cannot be interrupted.
-                    continue
-                elif event.type == pygame.KEYDOWN:
-                    shortcut_modifiers = pygame.KMOD_CTRL | pygame.KMOD_META
-                    has_undo_modifier = bool(event.mod & shortcut_modifiers)
-                    digit = _digit_from_key(event.key)
-                    command: TurnCommand | None = None
-                    if digit is not None and event.mod & pygame.KMOD_CTRL:
-                        if macro_recording is None:
-                            macro_selection.clear()
-                            macro_recording = MacroRecording(digit)
-                            recording_history = turn_history.snapshot()
-                            status_message = None
-                        else:
-                            status_message = "Finish the current recording first"
-                            status_is_error = True
-                            status_until = now + 3.0
-                    elif digit is not None:
-                        if macro_recording is not None:
-                            continue
-                        macro = settings.macros[digit]
-                        if macro is None:
-                            continue
-                        try:
-                            commands = macro.commands(
-                                macro_selection.coordinates,
-                                reverse=bool(event.mod & pygame.KMOD_SHIFT),
-                            )
-                        except ValueError:
-                            status_message = (
-                                f"Macro {digit} requires {macro.required_face_count} faces; "
-                                f"selected {len(macro_selection.coordinates)}"
-                            )
-                            status_is_error = True
-                            status_until = now + 3.0
-                            continue
-                        turn_queue.extend(_QueuedTurn(item, record_history=True) for item in commands)
-                        playback_active = True
-                        status_message = None
-                    elif has_undo_modifier and event.key == pygame.K_z:
-                        if event.mod & pygame.KMOD_SHIFT:
-                            command = turn_history.redo()
-                        else:
-                            minimum_position = (
-                                recording_history.position if recording_history is not None else 0
-                            )
-                            command = turn_history.undo(minimum_position)
-                    elif has_undo_modifier and event.key == pygame.K_y:
-                        command = turn_history.redo()
-                    if command is not None:
-                        macro_selection.clear()
-                        if macro_recording is not None:
-                            if recording_history is None:
-                                raise RuntimeError("macro recording has no history snapshot")
-                            macro_recording.synchronize(
-                                board,
-                                turn_history.commands_since(recording_history.position),
-                            )
-                        animation = TurnAnimation.begin(
-                            board,
-                            command.coordinate,
-                            command.direction,
-                            now,
-                            duration_seconds=settings.turn_animation_duration_seconds,
-                        )
-                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    left_button_down_at = event.pos
-                    left_button_selecting = macro_recording is None and bool(
-                        pygame.key.get_mods() & pygame.KMOD_SHIFT
-                    )
-                    panning = False
-                elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-                    if left_button_down_at is not None and not panning:
-                        q, r = hex_at_point(
-                            left_button_down_at,
-                            height=HEX_HEIGHT * camera.zoom,
-                            offset=camera.offset,
-                        )
-                        coordinate = HexCoordinate(q, r)
-                        if left_button_selecting and macro_recording is None:
-                            macro_selection.add(board, coordinate)
-                        else:
-                            macro_selection.clear()
-                            command = TurnCommand(coordinate, TurnDirection.COUNTERCLOCKWISE)
-                            turn_history.record(command)
-                            if macro_recording is not None:
-                                if recording_history is None:
-                                    raise RuntimeError("macro recording has no history snapshot")
-                                macro_recording.synchronize(
-                                    board,
-                                    turn_history.commands_since(recording_history.position),
-                                )
-                            animation = TurnAnimation.begin(
-                                board,
-                                command.coordinate,
-                                command.direction,
-                                now,
-                                duration_seconds=settings.turn_animation_duration_seconds,
-                            )
-                    left_button_down_at = None
-                    left_button_selecting = False
-                    panning = False
-                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
-                    q, r = hex_at_point(
-                        event.pos,
-                        height=HEX_HEIGHT * camera.zoom,
-                        offset=camera.offset,
-                    )
-                    command = TurnCommand(HexCoordinate(q, r), TurnDirection.CLOCKWISE)
-                    macro_selection.clear()
-                    turn_history.record(command)
-                    if macro_recording is not None:
-                        if recording_history is None:
-                            raise RuntimeError("macro recording has no history snapshot")
-                        macro_recording.synchronize(
-                            board,
-                            turn_history.commands_since(recording_history.position),
-                        )
-                    animation = TurnAnimation.begin(
-                        board,
-                        command.coordinate,
-                        command.direction,
-                        now,
-                        duration_seconds=settings.turn_animation_duration_seconds,
-                    )
-                elif event.type == pygame.MOUSEMOTION:
-                    mouse_inside = True
-                    if left_button_down_at is not None:
-                        if panning or _left_drag_started(left_button_down_at, event.pos):
-                            panning = True
-                            camera.pan(*event.rel)
-                elif event.type == pygame.MOUSEWHEEL:
-                    camera.zoom_by(event.y, pygame.mouse.get_pos())
-
+            elif self.playback_active:
+                self.playback_active = False
+
+        # Ask Qt to schedule a paint event for the newly advanced state.
+        self.update()
+
+    def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802 - Qt virtual method
+        """Render the complete frame with QPainter."""
+        # Bind a painter to the widget for the duration of this paint event.
+        painter = QPainter(self)
+        try:
+            # Rebuild the static board only when its viewport or settled model
+            # state changes, or when animation completion requests a refresh.
+            viewport = (self.width(), self.height())
+            view_key = (viewport, self.camera.offset, self.camera.zoom)
+            board_state = self.board.sticker_state()
+            cache_is_stale = self.animation is None and board_state != self._static_cache_state
+            if (
+                self._static_cache is None
+                or view_key != self._static_cache_view_key
+                or cache_is_stale
+                or self._force_static_refresh
+            ):
+                self._static_cache = render_static_board(viewport, self.board, self.camera)
+                self._static_cache_view_key = view_key
+                self._static_cache_state = board_state
+                self._force_static_refresh = False
+
+            # Resolve the hovered screen position to a periodic board cell.
             hovered_coordinate = None
-            if mouse_inside:
+            if self.mouse_inside:
                 q, r = hex_at_point(
-                    pygame.mouse.get_pos(),
-                    height=HEX_HEIGHT * camera.zoom,
-                    offset=camera.offset,
+                    self.mouse_position,
+                    height=HEX_HEIGHT * self.camera.zoom,
+                    offset=self.camera.offset,
                 )
                 hovered_coordinate = HexCoordinate(q, r)
 
+            # Composite the cached board, current animation, highlights, and
+            # macro markers into the widget.
             draw_board(
-                screen,
-                board=board,
-                camera=camera,
+                painter,
+                viewport,
+                board=self.board,
+                camera=self.camera,
                 hovered_coordinate=hovered_coordinate,
-                animation=animation,
-                now=now,
+                animation=self.animation,
+                now=time.monotonic(),
                 macro_face_numbers=(
-                    macro_recording.face_numbers
-                    if macro_recording is not None
-                    else macro_selection.face_numbers
+                    self.macro_recording.face_numbers
+                    if self.macro_recording is not None
+                    else self.macro_selection.face_numbers
                 ),
-                recording_slot=macro_recording.slot if macro_recording is not None else None,
-                recording_move_count=macro_recording.move_count if macro_recording is not None else 0,
-                status_message=status_message,
-                status_is_error=status_is_error,
+                static_background=self._static_cache,
             )
-            pygame.display.flip()
-            clock.tick(60)
-    finally:
-        pygame.quit()
 
-    return 0
+            # Draw macro-recording information independently from the board.
+            if self.macro_recording is not None:
+                draw_recording_panel(
+                    painter,
+                    self.macro_recording.slot,
+                    self.macro_recording.move_count,
+                    len(self.macro_recording.face_numbers),
+                )
+
+            # Draw the temporary status as the topmost interface element.
+            if self.status_message is not None:
+                draw_status_message(
+                    painter,
+                    viewport,
+                    self.status_message,
+                    self.status_is_error,
+                )
+        finally:
+            # Always release the native painting resource, including on error.
+            painter.end()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802 - Qt virtual method
+        """Handle macros, cancellation, and undo/redo shortcuts."""
+        # Capture the key and normalized modifier state once for dispatch.
+        now = time.monotonic()
+        key = event.key()
+        modifiers = event.modifiers()
+        control_pressed = bool(
+            modifiers & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier)
+        )
+        shift_pressed = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+
+        # Give cancellation and recording completion priority over the normal
+        # interaction lock so recording can be resolved at any time.
+        if key == Qt.Key.Key_Escape:
+            self._handle_escape(now)
+            event.accept()
+            return
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and self.macro_recording is not None:
+            self._save_recording(now)
+            event.accept()
+            return
+
+        # Ignore all other shortcuts while an atomic turn or macro is active.
+        if self.animation is not None or self.playback_active:
+            event.accept()
+            return
+
+        # Translate digits and history shortcuts into macro actions or a turn
+        # command that can use the shared animation path below.
+        digit = _digit_from_key(key)
+        command: TurnCommand | None = None
+        if digit is not None and control_pressed:
+            self._begin_recording(digit, now)
+        elif digit is not None:
+            self._play_macro(digit, reverse=shift_pressed, now=now)
+        elif control_pressed and key == Qt.Key.Key_Z:
+            if shift_pressed:
+                command = self.turn_history.redo()
+            else:
+                minimum = self.recording_history.position if self.recording_history is not None else 0
+                command = self.turn_history.undo(minimum)
+        elif control_pressed and key == Qt.Key.Key_Y:
+            command = self.turn_history.redo()
+        else:
+            super().keyPressEvent(event)
+            return
+
+        # Animate an undo/redo command after synchronizing any live recording.
+        if command is not None:
+            self.macro_selection.clear()
+            self._synchronize_recording()
+            self._begin_animation(command, now)
+
+        # Reflect non-command macro state changes and consume the handled key.
+        self.update()
+        event.accept()
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt virtual method
+        """Start a pan/select gesture or perform a clockwise turn."""
+        # Update hover state from the position delivered with the press.
+        self.mouse_inside = True
+        self.mouse_position = self._event_position(event)
+
+        # Keep turns and macro playback atomic by rejecting new board input.
+        if self.animation is not None or self.playback_active:
+            event.accept()
+            return
+
+        # A left press begins a possible click, selection, or pan gesture;
+        # a right press performs its clockwise turn immediately.
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.left_button_down_at = self.mouse_position
+            self.left_button_selecting = self.macro_recording is None and bool(
+                event.modifiers() & Qt.KeyboardModifier.ShiftModifier
+            )
+            self.panning = False
+        elif event.button() == Qt.MouseButton.RightButton:
+            coordinate = self._coordinate_at(self.mouse_position)
+            self._perform_new_turn(TurnCommand(coordinate, TurnDirection.CLOCKWISE))
+
+        # Prevent the handled mouse press from propagating to the parent.
+        event.accept()
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt virtual method
+        """Finish a left-button selection, turn, or pan gesture."""
+        # Refresh the pointer position and delegate unrelated button releases.
+        self.mouse_position = self._event_position(event)
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mouseReleaseEvent(event)
+            return
+
+        # Treat a stationary left gesture as either macro-face selection or a
+        # counterclockwise turn; a completed pan performs neither action.
+        if self.left_button_down_at is not None and not self.panning:
+            coordinate = self._coordinate_at(self.left_button_down_at)
+            if self.left_button_selecting and self.macro_recording is None:
+                self.macro_selection.add(self.board, coordinate)
+            else:
+                self._perform_new_turn(TurnCommand(coordinate, TurnDirection.COUNTERCLOCKWISE))
+
+        # Clear all gesture flags so the next press starts independently.
+        self.left_button_down_at = None
+        self.left_button_selecting = False
+        self.panning = False
+
+        # Repaint selection changes and consume the release event.
+        self.update()
+        event.accept()
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt virtual method
+        """Update hover state and pan an active drag."""
+        previous = self.mouse_position
+        self.mouse_position = self._event_position(event)
+        self.mouse_inside = True
+        if self.left_button_down_at is not None:
+            if self.panning or _left_drag_started(self.left_button_down_at, self.mouse_position):
+                self.panning = True
+                self.camera.pan(
+                    self.mouse_position[0] - previous[0],
+                    self.mouse_position[1] - previous[1],
+                )
+        self.update()
+        event.accept()
+
+    def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802 - Qt virtual method
+        """Zoom around the pointer using the wheel's standard step units."""
+        if self.animation is None and not self.playback_active:
+            delta = event.angleDelta().y()
+            if delta:
+                position = event.position()
+                self.camera.zoom_by(delta / 120, (position.x(), position.y()))
+                self.update()
+        event.accept()
+
+    def enterEvent(self, event: QEnterEvent) -> None:  # noqa: N802 - Qt virtual method
+        self.mouse_inside = True
+        self.update()
+
+    def leaveEvent(self, event) -> None:  # noqa: N802 - Qt virtual method
+        self.mouse_inside = False
+        self.update()
+
+    @staticmethod
+    def _event_position(event: QMouseEvent) -> tuple[int, int]:
+        position = event.position()
+        return round(position.x()), round(position.y())
+
+    def _coordinate_at(self, point: tuple[int, int]) -> HexCoordinate:
+        q, r = hex_at_point(point, height=HEX_HEIGHT * self.camera.zoom, offset=self.camera.offset)
+        return HexCoordinate(q, r)
+
+    def _perform_new_turn(self, command: TurnCommand) -> None:
+        self.macro_selection.clear()
+        self.turn_history.record(command)
+        self._synchronize_recording()
+        self._begin_animation(command, time.monotonic())
+
+    def _begin_animation(self, command: TurnCommand, now: float) -> None:
+        self.animation = TurnAnimation.begin(
+            self.board,
+            command.coordinate,
+            command.direction,
+            now,
+            self.settings.turn_animation_duration_seconds,
+        )
+
+    def _synchronize_recording(self) -> None:
+        if self.macro_recording is None:
+            return
+        if self.recording_history is None:
+            raise RuntimeError("macro recording has no history snapshot")
+        commands = self.turn_history.commands_since(self.recording_history.position)
+        self.macro_recording.synchronize(self.board, commands)
+
+    def _handle_escape(self, now: float) -> None:
+        # Macro playback is intentionally atomic and cannot be canceled.
+        if self.playback_active:
+            return
+
+        # Cancel a live recording by queuing inverse moves, restoring its
+        # history snapshot, and clearing all provisional macro state.
+        if self.macro_recording is not None:
+            self.turn_queue.extend(
+                _QueuedTurn(command, record_history=False)
+                for command in self.macro_recording.rollback_commands
+            )
+            if self.recording_history is None:
+                raise RuntimeError("macro recording has no history snapshot")
+            self.turn_history.restore(self.recording_history)
+            self.macro_recording = None
+            self.recording_history = None
+            self.macro_selection.clear()
+            self.playback_active = bool(self.turn_queue)
+            self._show_status("Macro recording canceled", False, now)
+
+        # Outside recording, Escape only clears the selected macro faces.
+        elif self.macro_selection:
+            self.macro_selection.clear()
+            self.status_message = None
+
+        # Display the updated recording or selection state.
+        self.update()
+
+    def _begin_recording(self, slot: int, now: float) -> None:
+        if self.macro_recording is None:
+            self.macro_selection.clear()
+            self.macro_recording = MacroRecording(slot)
+            self.recording_history = self.turn_history.snapshot()
+            self.status_message = None
+        else:
+            self._show_status("Finish the current recording first", True, now)
+
+    def _save_recording(self, now: float) -> None:
+        # Ignore calls made after the recording has already ended.
+        if self.macro_recording is None:
+            return
+
+        # Validate that the recording contains at least one serializable move.
+        try:
+            macro = self.macro_recording.macro
+        except ValueError:
+            self._show_status("Cannot save an empty macro", True, now)
+            return
+
+        # Build updated immutable settings and persist them atomically.
+        new_settings = self.settings.with_macro(self.macro_recording.slot, macro)
+        try:
+            save_settings(new_settings)
+        except OSError as error:
+            self._show_status(f"Could not save macro: {error}", True, now, duration=5.0)
+            return
+
+        # Commit the new settings locally and leave recording mode.
+        slot = self.macro_recording.slot
+        self.settings = new_settings
+        self.macro_recording = None
+        self.recording_history = None
+        self._show_status(f"Macro {slot} saved", False, now)
+
+    def _play_macro(self, slot: int, *, reverse: bool, now: float) -> None:
+        # A recording cannot recursively launch another macro.
+        if self.macro_recording is not None:
+            return
+
+        # Empty macro slots have no action associated with their digit.
+        macro = self.settings.macros[slot]
+        if macro is None:
+            return
+
+        # Resolve relative face numbers against the ordered current selection.
+        try:
+            commands = macro.commands(self.macro_selection.coordinates, reverse=reverse)
+        except ValueError:
+            self._show_status(
+                f"Macro {slot} requires {macro.required_face_count} faces; "
+                f"selected {len(self.macro_selection.coordinates)}",
+                True,
+                now,
+            )
+            return
+
+        # Queue the resolved turns, lock input for atomic playback, and start
+        # the first command without waiting for the next timer tick.
+        self.turn_queue.extend(_QueuedTurn(command, record_history=True) for command in commands)
+        self.playback_active = True
+        self.status_message = None
+        self.advance(now)
+
+    def _show_status(self, message: str, is_error: bool, now: float, duration: float = 3.0) -> None:
+        self.status_message = message
+        self.status_is_error = is_error
+        self.status_until = now + duration
+
+
+class GameWindow(QMainWindow):
+    """Top-level resizable MagicTile window."""
+
+    def __init__(self, settings: Settings) -> None:
+        super().__init__()
+        self.setWindowTitle(WINDOW_TITLE)
+        self.board_widget = GameBoardWidget(settings, self)
+        self.setCentralWidget(self.board_widget)
+        self.resize(*WINDOW_SIZE)
+
+
+def run(settings: Settings) -> int:
+    """Create the Qt application and run its event loop."""
+    application = QApplication.instance()
+    owns_application = application is None
+    if application is None:
+        application = QApplication(sys.argv)
+    window = GameWindow(settings)
+    window.show()
+    if not owns_application:
+        return 0
+    return application.exec()

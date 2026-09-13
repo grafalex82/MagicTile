@@ -26,7 +26,7 @@ class Camera:
         self.x += dx
         self.y += dy
 
-    def zoom_by(self, steps: int, focus: tuple[float, float]) -> None:
+    def zoom_by(self, steps: float, focus: tuple[float, float]) -> None:
         """Zoom by mouse-wheel steps while keeping ``focus`` stationary."""
         if steps == 0:
             return

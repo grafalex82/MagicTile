@@ -1,30 +1,75 @@
-import pygame
+import os
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+import pytest
+from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtGui import QColor, QImage, QKeyEvent, QPainter
+from PyQt6.QtWidgets import QApplication
+from PyQt6.QtTest import QTest
 
 from magic_tile.domain import HexCoordinate, PeriodicBoard, TurnDirection
-from magic_tile.input import parse_macro, serialize_macro
+from magic_tile.input import TurnCommand, parse_macro, serialize_macro
 from magic_tile.persistence import Settings
 from magic_tile.ui.camera import Camera
 from magic_tile.ui.game_window import (
+    GameBoardWidget,
+    GameWindow,
     MACRO_HIGHLIGHT_COLOR,
     TURN_GUIDE_HIGHLIGHT_COLOR,
-    _circular_alpha_mask,
-    _curved_face_geometry,
     _digit_from_key,
     _left_drag_started,
-    _render_turn_frame,
-    _scale_turn_frame,
-    draw_board,
-    run,
+    draw_recording_panel,
+    draw_status_message,
+    render_board,
 )
+from magic_tile.ui.qt_renderer import _cell_geometries
 from magic_tile.ui.turn_animation import TurnAnimation
 
 
-def test_circular_mask_has_opaque_center_and_transparent_corners() -> None:
-    mask = _circular_alpha_mask(radius=30)
+@pytest.fixture(scope="session", autouse=True)
+def application() -> QApplication:
+    app = QApplication.instance() or QApplication([])
+    yield app
 
-    assert mask.get_at((33, 33)).a == 255
-    assert mask.get_at((0, 0)).a == 0
-    assert mask.get_at((66, 66)).a == 0
+
+@pytest.fixture
+def widget(application) -> GameBoardWidget:
+    result = GameBoardWidget(Settings(turn_animation_duration_seconds=0.001))
+    result.resize(640, 480)
+    result._frame_timer.stop()
+    yield result
+    result.close()
+    result.deleteLater()
+
+
+def _image_contains(image, color: QColor) -> bool:
+    target = (color.red(), color.green(), color.blue())
+    for y in range(image.height()):
+        for x in range(image.width()):
+            pixel = image.pixelColor(x, y)
+            if (pixel.red(), pixel.green(), pixel.blue()) == target:
+                return True
+    return False
+
+
+def _image_bytes(image) -> bytes:
+    return bytes(image.constBits().asstring(image.sizeInBytes()))
+
+
+def _finish_turns(widget: GameBoardWidget) -> None:
+    for _ in range(100):
+        if widget.animation is None and not widget.turn_queue:
+            widget.advance(10_000_000.0)
+            return
+        now = (
+            widget.animation.started_at + widget.animation.duration_seconds + 1.0
+            if widget.animation is not None
+            else 10_000_000.0
+        )
+        widget.advance(now)
+        widget.advance(now)
+    raise AssertionError("turn queue did not finish")
 
 
 def test_left_drag_starts_only_after_moving_more_than_five_pixels_on_an_axis() -> None:
@@ -35,221 +80,190 @@ def test_left_drag_starts_only_after_moving_more_than_five_pixels_on_an_axis() -
     assert _left_drag_started(button_down_at, (100, 94))
 
 
-def test_curved_geometry_builds_six_circle_cut_edges_and_corners() -> None:
-    geometry = _curved_face_geometry(height=200, piece_width=3, grid_width=10)
+def test_vector_geometry_builds_six_circle_cut_edges_and_corners() -> None:
+    geometry = _cell_geometries(200)[0]
 
-    assert len(geometry.edge_masks) == 6
-    assert len(geometry.corner_masks) == 6
-    assert all(mask.count() > 0 for mask in geometry.edge_masks)
-    assert all(mask.count() > 0 for mask in geometry.corner_masks)
-
-
-def test_procedural_turn_frame_has_no_pixels_outside_its_mask() -> None:
-    board = PeriodicBoard()
-    animation = TurnAnimation.begin(
-        board,
-        HexCoordinate(0, 0),
-        TurnDirection.CLOCKWISE,
-        started_at=0.0,
-        duration_seconds=0.5,
-    )
-
-    frame = _render_turn_frame(
-        animation,
-        board.face_at(HexCoordinate(0, 0)),
-        angle_degrees=23.0,
-        zoom=1.0,
-    )
-
-    assert frame.get_at((0, 0)).a == 0
-    assert frame.get_at((frame.get_width() - 1, 0)).a == 0
-    assert frame.get_at((0, frame.get_height() - 1)).a == 0
-
-
-def test_turn_frame_scaling_uses_circle_radius_not_surface_padding() -> None:
-    source_radius = 30
-    source = _circular_alpha_mask(source_radius).copy()
-
-    scaled = _scale_turn_frame(source, source_radius, target_radius=15)
-
-    center = scaled.get_width() // 2
-    assert scaled.get_at((center + 15, center)).a > 0
-    assert scaled.get_at((center + 16, center)).a == 0
+    assert len(geometry.edges) == 6
+    assert len(geometry.corners) == 6
+    assert all(len(polygon) >= 3 for polygon in geometry.edges)
+    assert all(len(polygon) >= 3 for polygon in geometry.corners)
 
 
 def test_number_row_and_keypad_digits_map_to_macro_slots() -> None:
-    assert _digit_from_key(pygame.K_0) == 0
-    assert _digit_from_key(pygame.K_7) == 7
-    assert _digit_from_key(pygame.K_KP3) == 3
-    assert _digit_from_key(pygame.K_ESCAPE) is None
+    assert _digit_from_key(Qt.Key.Key_0) == 0
+    assert _digit_from_key(Qt.Key.Key_7) == 7
+    assert _digit_from_key(Qt.Key.Key_3) == 3
+    assert _digit_from_key(Qt.Key.Key_Escape) is None
 
 
-def test_board_draws_macro_markers_and_recording_panel() -> None:
+def test_board_draws_macro_markers() -> None:
     board = PeriodicBoard()
-    surface = pygame.Surface((640, 480))
     selected_face = board.face_at(HexCoordinate(0, 0))
 
-    draw_board(
-        surface,
+    image = render_board(
+        (640, 480),
         board=board,
+        camera=Camera(320, 240),
         macro_face_numbers={selected_face: 1},
-        recording_slot=4,
-        recording_move_count=3,
     )
 
-    marker_pixels = pygame.mask.from_threshold(
-        surface,
-        MACRO_HIGHLIGHT_COLOR,
-        threshold=(1, 1, 1, 255),
-    )
-    assert marker_pixels.count() > 0
+    assert _image_contains(image, MACRO_HIGHLIGHT_COLOR)
 
 
-def test_hover_highlight_is_drawn_above_macro_highlight() -> None:
+def test_recording_panel_and_status_are_drawn_as_separate_overlays() -> None:
+    image = render_board((640, 480), camera=Camera(320, 240))
+    board_only = _image_bytes(image)
+    painter = QPainter(image)
+    try:
+        draw_recording_panel(painter, slot=4, move_count=3, face_count=2)
+        draw_status_message(painter, (640, 480), "Macro saved", is_error=False)
+    finally:
+        painter.end()
+
+    assert _image_bytes(image) != board_only
+    assert _image_contains(image, QColor("#ff3b30"))
+
+
+def test_hover_highlight_is_drawn_with_macro_highlight() -> None:
     board = PeriodicBoard()
-    macro_surface = pygame.Surface((640, 480))
-    combined_surface = pygame.Surface((640, 480))
     coordinate = HexCoordinate(0, 0)
-    camera = Camera(320, 240)
-
-    draw_board(
-        macro_surface,
+    image = render_board(
+        (640, 480),
         board=board,
-        camera=camera,
-        macro_face_numbers={board.face_at(coordinate): 1},
-    )
-    draw_board(
-        combined_surface,
-        board=board,
-        camera=camera,
+        camera=Camera(320, 240),
         hovered_coordinate=coordinate,
         macro_face_numbers={board.face_at(coordinate): 1},
     )
 
-    macro_mask = pygame.mask.from_threshold(
-        macro_surface,
-        MACRO_HIGHLIGHT_COLOR,
-        threshold=(1, 1, 1, 255),
+    assert _image_contains(image, MACRO_HIGHLIGHT_COLOR)
+    assert _image_contains(image, TURN_GUIDE_HIGHLIGHT_COLOR)
+
+
+def test_mid_turn_frame_differs_from_completed_board() -> None:
+    board = PeriodicBoard()
+    camera = Camera(320, 240)
+    animation = TurnAnimation.begin(
+        board,
+        HexCoordinate(0, 0),
+        TurnDirection.CLOCKWISE,
+        started_at=10.0,
+        duration_seconds=0.5,
     )
-    hover_mask = pygame.mask.from_threshold(
-        combined_surface,
-        TURN_GUIDE_HIGHLIGHT_COLOR,
-        threshold=(1, 1, 1, 255),
+
+    animated = render_board((640, 480), board=board, camera=camera, animation=animation, now=10.25)
+    completed = render_board((640, 480), board=board, camera=camera)
+
+    assert _image_bytes(animated) != _image_bytes(completed)
+
+
+def test_static_face_cache_tracks_colors_read_from_mutable_face() -> None:
+    board = PeriodicBoard()
+    camera = Camera(320, 240)
+    before = render_board((640, 480), board=board, camera=camera)
+
+    board.turn(HexCoordinate(0, 0), TurnDirection.CLOCKWISE)
+    after = render_board((640, 480), board=board, camera=camera)
+
+    assert _image_bytes(after) != _image_bytes(before)
+
+
+def test_animation_start_reuses_the_already_rendered_static_background(widget) -> None:
+    initial_frame = QImage(640, 480, QImage.Format.Format_ARGB32_Premultiplied)
+    widget.render(initial_frame)
+    cached_background = widget._static_cache
+
+    widget._perform_new_turn(
+        TurnCommand(HexCoordinate(0, 0), TurnDirection.CLOCKWISE)
     )
-    assert macro_mask.overlap(hover_mask, (0, 0)) is not None
+    animated_frame = QImage(640, 480, QImage.Format.Format_ARGB32_Premultiplied)
+    widget.render(animated_frame)
+
+    assert widget._static_cache is cached_background
 
 
-def test_escape_does_not_close_the_application(monkeypatch) -> None:
-    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
-    monkeypatch.setattr("magic_tile.ui.game_window.WINDOW_SIZE", (320, 240))
-    batches = iter(
-        (
-            [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE, mod=0)],
-            [pygame.event.Event(pygame.QUIT)],
-        )
+def test_escape_does_not_close_the_window(application) -> None:
+    window = GameWindow(Settings())
+    window.show()
+    event = QKeyEvent(
+        QKeyEvent.Type.KeyPress,
+        Qt.Key.Key_Escape,
+        Qt.KeyboardModifier.NoModifier,
     )
-    event_reads = 0
 
-    def next_events() -> list[pygame.event.Event]:
-        nonlocal event_reads
-        event_reads += 1
-        return next(batches)
+    window.board_widget.keyPressEvent(event)
 
-    monkeypatch.setattr(pygame.event, "get", next_events)
-
-    assert run(Settings(turn_animation_duration_seconds=0.001)) == 0
-    assert event_reads == 2
+    assert window.isVisible()
+    window.close()
 
 
-def test_escape_during_macro_playback_does_not_interrupt_queued_turns(monkeypatch) -> None:
-    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
-    monkeypatch.setattr("magic_tile.ui.game_window.WINDOW_SIZE", (320, 240))
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: pygame.KMOD_SHIFT)
-    batches = iter(
-        (
-            [
-                pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(100, 100)),
-                pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(100, 100)),
-            ],
-            [
-                pygame.event.Event(pygame.KEYDOWN, key=pygame.K_0, mod=0),
-                pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE, mod=0),
-            ],
-            *([[]] * 8),
-            [pygame.event.Event(pygame.QUIT)],
-        )
-    )
-    monkeypatch.setattr(pygame.event, "get", lambda: next(batches))
-    animations: list[TurnAnimation] = []
-    original_begin = TurnAnimation.begin
+def test_qt_mouse_event_turns_a_face(widget, application) -> None:
+    widget.show()
+    application.processEvents()
+    original = widget.board.sticker_state()
 
-    def track_animation(*args, **kwargs) -> TurnAnimation:
-        animation = original_begin(*args, **kwargs)
-        animations.append(animation)
-        return animation
+    QTest.mouseClick(widget, Qt.MouseButton.RightButton, pos=QPoint(320, 240))
 
-    monkeypatch.setattr(TurnAnimation, "begin", track_animation)
-    settings = Settings(turn_animation_duration_seconds=0.001).with_macro(0, parse_macro("1-1'"))
-
-    assert run(settings) == 0
-    assert len(animations) == 2
+    assert widget.board.sticker_state() != original
 
 
-def test_escape_during_recording_animates_rollback_without_saving(monkeypatch) -> None:
-    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
-    monkeypatch.setattr("magic_tile.ui.game_window.WINDOW_SIZE", (320, 240))
-    batches = iter(
-        (
-            [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_4, mod=pygame.KMOD_CTRL)],
-            [pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=3, pos=(100, 100))],
-            [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE, mod=0)],
-            *([[]] * 6),
-            [pygame.event.Event(pygame.QUIT)],
-        )
-    )
-    monkeypatch.setattr(pygame.event, "get", lambda: next(batches))
-    saved_settings: list[Settings] = []
+def test_qt_keyboard_event_starts_macro_recording(widget, application) -> None:
+    widget.show()
+    widget.setFocus()
+    application.processEvents()
+
+    QTest.keyClick(widget, Qt.Key.Key_4, Qt.KeyboardModifier.ControlModifier)
+
+    assert widget.macro_recording is not None
+    assert widget.macro_recording.slot == 4
+
+
+def test_escape_during_macro_playback_does_not_interrupt_queued_turns(widget) -> None:
+    widget.settings = widget.settings.with_macro(0, parse_macro("1-1'"))
+    widget.macro_selection.add(widget.board, HexCoordinate(0, 0))
+    original = widget.board.sticker_state()
+    widget._play_macro(0, reverse=False, now=1.0)
+
+    widget._handle_escape(1.0)
+    _finish_turns(widget)
+
+    assert widget.board.sticker_state() == original
+    assert not widget.playback_active
+
+
+def test_escape_during_recording_animates_rollback_without_saving(widget, monkeypatch) -> None:
+    saved_settings = []
     monkeypatch.setattr("magic_tile.ui.game_window.save_settings", saved_settings.append)
-    boards: list[PeriodicBoard] = []
-    original_begin = TurnAnimation.begin
+    original = widget.board.sticker_state()
+    widget._begin_recording(4, now=1.0)
+    widget._perform_new_turn(TurnCommand(HexCoordinate(0, 0), TurnDirection.CLOCKWISE))
 
-    def track_animation(board: PeriodicBoard, *args, **kwargs) -> TurnAnimation:
-        boards.append(board)
-        return original_begin(board, *args, **kwargs)
+    widget._handle_escape(now=2.0)
+    _finish_turns(widget)
 
-    monkeypatch.setattr(TurnAnimation, "begin", track_animation)
-    solved_state = PeriodicBoard().sticker_state()
-
-    assert run(Settings(turn_animation_duration_seconds=0.001)) == 0
-    assert len(boards) == 2
-    assert boards[-1].sticker_state() == solved_state
+    assert widget.board.sticker_state() == original
     assert saved_settings == []
 
 
-def test_undo_and_redo_edit_the_active_macro_on_the_shared_history(monkeypatch) -> None:
-    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
-    monkeypatch.setattr("magic_tile.ui.game_window.WINDOW_SIZE", (320, 240))
-    batches = iter(
-        (
-            [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_4, mod=pygame.KMOD_CTRL)],
-            [pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=3, pos=(100, 100))],
-            [],
-            [],
-            [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_z, mod=pygame.KMOD_CTRL)],
-            [],
-            [],
-            [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN, mod=0)],
-            [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_y, mod=pygame.KMOD_CTRL)],
-            [],
-            [],
-            [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN, mod=0)],
-            [pygame.event.Event(pygame.QUIT)],
-        )
-    )
-    monkeypatch.setattr(pygame.event, "get", lambda: next(batches))
-    saved_settings: list[Settings] = []
+def test_undo_and_redo_edit_active_macro_on_shared_history(widget, monkeypatch) -> None:
+    saved_settings = []
     monkeypatch.setattr("magic_tile.ui.game_window.save_settings", saved_settings.append)
+    widget._begin_recording(4, now=1.0)
+    command = TurnCommand(HexCoordinate(0, 0), TurnDirection.CLOCKWISE)
+    widget._perform_new_turn(command)
+    _finish_turns(widget)
+    undo = widget.turn_history.undo(widget.recording_history.position)
+    assert undo is not None
+    widget._synchronize_recording()
+    widget._begin_animation(undo, now=2.0)
+    _finish_turns(widget)
+    widget._save_recording(now=3.0)
+    assert saved_settings == []
+    redo = widget.turn_history.redo()
+    assert redo is not None
+    widget._synchronize_recording()
+    widget._begin_animation(redo, now=4.0)
+    _finish_turns(widget)
+    widget._save_recording(now=5.0)
 
-    assert run(Settings(turn_animation_duration_seconds=0.001)) == 0
     assert len(saved_settings) == 1
     assert serialize_macro(saved_settings[0].macros[4]) == "1"
