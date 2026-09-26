@@ -1,10 +1,10 @@
-# MagicTile concept and design
+# MagicTile game design and architecture
 
-This document records the current project concept. Statements under “Confirmed
-concept” are treated as initial requirements. The questions listed later must
-be resolved before the corresponding systems are implemented.
+This document describes the rules and architecture of the current playable
+version. The final section records enhancements that remain outside the
+implemented game loop.
 
-## Confirmed concept
+## Current game rules
 
 ### Board
 
@@ -52,15 +52,20 @@ permutation, while the view only displays the transition.
 
 ### Objective
 
-After the puzzle has been scrambled, the player must solve it so that every
-face consists entirely of pieces of its own color.
+A scored game begins when the player chooses a scramble of 3, 5, 10, or 50
+moves from the Puzzle menu. The board is reset before those random turns are
+applied. The player then solves the puzzle so that every face consists entirely
+of pieces of its own color. Direct face turns and turns played by macros
+contribute to the move counter. Undo/redo does not adjust the counter, and
+Setup Move unwind turns are not counted. Reaching the solved state ends the
+game and displays the final move count.
 
 ### Controls
 
 - Left mouse button: rotate the selected face counterclockwise when released
   within 5 pixels on both axes; drag it farther to pan the camera.
 - Right mouse button: rotate the selected face clockwise.
-- Keyboard: alternative face selection and rotation controls.
+- Keyboard: undo/redo, macro, and Setup Move shortcuts.
 - Macros: record face-relative move sequences in ten persistent keyboard slots.
 - Setup moves: F1 records one concrete preparation sequence, F2 ends recording,
   and F3 plays it once in reverse order and direction before clearing it.
@@ -73,10 +78,45 @@ after F2 and is included in game saves together with its recording state.
 
 ### Saves and menus
 
-The game must save the puzzle state and restore it on a later launch. At a
-minimum, the main menu must provide access to continuing the game, saving the
-current state, and choosing available actions or modes. The exact menu contents
-will be determined later.
+The File menu opens and saves portable, versioned JSON game files. A save
+contains the sticker arrangement, active-game flag, move count, and any active
+Setup Move, including whether it is still being recorded. Writes use a
+temporary file and atomic replacement. Loading validates the format before
+replacing the current session and clears transient animation, macro selection,
+and undo/redo state.
+
+The application menu is organized as follows:
+
+- **File:** Open, Save, Save As, and Quit.
+- **Puzzle:** Reset, Scrumble with 3/5/10/50 moves, Undo, and Redo.
+- **Macro:** record and play slots 0–9, play them in reverse, and control Setup
+  Moves.
+
+### Settings
+
+On startup, the game loads `settings.json` from the current directory. If the
+file does not exist, it creates one with the default animation duration of 0.5
+seconds and no recorded macros:
+
+```json
+{
+  "turn_animation_duration_seconds": 0.5,
+  "macros": {}
+}
+```
+
+Macro slots use readable relative moves. A number identifies a selected face,
+an apostrophe means counterclockwise, and moves may be separated by hyphens or
+spaces. For example:
+
+```json
+{
+  "turn_animation_duration_seconds": 0.5,
+  "macros": {
+    "0": "1-2'-1'-2"
+  }
+}
+```
 
 ## Architectural boundaries
 
@@ -90,17 +130,16 @@ will be determined later.
 This separation allows pytest to verify all game rules without opening a
 graphics window or processing system events.
 
-## Open questions
+## Remaining design decisions
 
-The following remain to be defined:
+The playable game loop is complete. The following enhancements are not yet
+defined or implemented:
 
-1. Which identifiers and controls should be assigned to the seven logical
-   faces?
-2. How is a face's keyboard identifier selected?
-3. What are the scrambling rules: number of moves, immediate inverse moves,
-   and random-number seed behavior?
-4. Are multiple save slots, autosaving, and portable save files required?
-5. Which items and game modes belong in the main menu?
+1. Keyboard-only face selection and rotation controls.
+2. Optional scramble policies such as preventing immediate inverse moves or
+   exposing a reproducible random seed.
+3. Autosaving and managed save slots in addition to portable save files.
+4. Additional game modes, audiovisual settings, and distribution targets.
 
 ## Macros
 
@@ -217,7 +256,7 @@ The final layer order is:
 Drawing the highlight last keeps it visible above the moving disk for the
 entire animation.
 
-## Preliminary technical decisions
+## Technical decisions
 
 - Logical positions use integer axial or cube coordinates for the hexagonal
   grid. Screen coordinates are calculated only during rendering.
@@ -228,4 +267,5 @@ entire animation.
 - Save files use versioned JSON rather than Python-specific serialization.
 - Animation progress is kept separate from the completed model state.
 
-These are working proposals and may change after the geometry is prototyped.
+These decisions describe the current implementation. They may evolve as new
+game modes and board configurations are added.

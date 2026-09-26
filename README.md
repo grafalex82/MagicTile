@@ -1,13 +1,24 @@
 # MagicTile
 
-MagicTile is a computer puzzle played on an infinite periodic plane of
+MagicTile is a playable desktop puzzle set on an infinite periodic plane of
 hexagonal faces. Its core idea is similar to a Rubik's Cube: the player rotates
 a selected face together with a surrounding ring of pieces and tries to return
 every face to a single color.
 
-The project is at an early stage. The periodic board, sticker model, mouse
-turns, exact 60-degree move permutation, undo/redo, face-relative macros, and
-portable game saves are implemented; the remaining game flow is still planned.
+Key features:
+
+- An infinite periodic hexagonal board with exact animated 60-degree turns.
+- A complete game loop with multiple scramble lengths, move counting, and
+  automatic solved-state detection.
+- Mouse-driven turns, panning, and zooming.
+- Animated undo and redo.
+- Ten persistent face-relative macro slots with normal and reverse playback.
+- Setup Moves that can be recorded and unwound after running a formula.
+- Portable game saves and human-readable configuration.
+
+| Solved board | Scrambled board |
+| --- | --- |
+| ![Solved MagicTile board](assets/screenshots/solved-board.png) | ![Scrambled MagicTile board](assets/screenshots/scrambled-board.png) |
 
 ## Core concept
 
@@ -19,13 +30,13 @@ portable game saves are implemented; the remaining game flow is still planned.
 - All visible copies of the same logical face rotate simultaneously.
 - The player can pan and zoom the camera.
 - A left click turns a face counterclockwise; a right click turns it clockwise.
-  Keyboard controls will also be available.
+- A new scored game starts from the **Puzzle → Scrumble** menu, with 3, 5, 10,
+  or 50 random setup turns.
 - Setup moves can be recorded, retained while a formula or macro runs, and
   unwound automatically in reverse.
 - The game state can be saved and restored between sessions.
 
-See the [design document](docs/DESIGN.md) for details and unresolved questions,
-and the [roadmap](docs/ROADMAP.md) for the planned implementation stages.
+See the [design document](docs/DESIGN.md) for the rules and architecture.
 
 ## Repository structure
 
@@ -33,13 +44,12 @@ and the [roadmap](docs/ROADMAP.md) for the planned implementation stages.
 MagicTile/
 ├── assets/                  # Images, fonts, and sounds
 ├── docs/
-│   ├── DESIGN.md            # Rules, controls, and open questions
-│   └── ROADMAP.md           # Implementation stages
+│   └── DESIGN.md            # Current rules and architecture
 ├── magic_tile/
 │   ├── domain/              # Board model, pieces, and moves
 │   ├── input/               # Mouse, keyboard, and macros
 │   ├── persistence/         # Saving and loading
-│   └── ui/                  # PyQt6 widgets, camera, rendering, and menus
+│   └── ui/                  # Window, camera, rendering, and menus
 └── tests/                   # Automated tests
 ```
 
@@ -55,33 +65,52 @@ contain repeated colors with different local neighborhoods.
 - PyQt6
 - pytest for development
 
-`pyenv` is not required. Dependencies are listed in `requirements.txt`, and the
-test configuration lives in `pytest.ini`.
-
-## Running the project
-
-Launch the graphics prototype with:
-
-```bash
-python -m magic_tile
-```
-
-Install or update the dependencies when needed:
+`pyenv` is not required. Install or update the dependencies with:
 
 ```bash
 python -m pip install -r requirements.txt
 ```
 
-The prototype displays a resizable PyQt6 window with a periodically coloured
-flat-top hexagonal grid. Every hexagon is 200 pixels high. Left-click a face to
-turn every copy of that logical face counterclockwise; right-click to turn it
-clockwise. A turn lasts for the configured duration and locks other board
-controls. Drag with
-the left mouse button more than 5 pixels on either axis to pan. Releasing it
-within that threshold turns the face. Scroll up to zoom in or down to zoom out;
-zoom is limited to 50% through 250%. Use Ctrl+Z to undo and Ctrl+Y (or
-Ctrl+Shift+Z) to redo; both play the normal turn animation. Close the window
-(for example with Alt+F4 on Windows) to exit.
+Runtime and development dependencies are listed in `requirements.txt`. The
+test configuration lives in `pytest.ini`.
+
+## Running the project
+
+Launch the game from the repository root with:
+
+```bash
+python -m magic_tile
+```
+
+Run the command from the directory where `settings.json` should be stored.
+
+## Controls
+
+### Board navigation and turns
+
+- Left-click a face to turn every copy of that logical face
+  counterclockwise.
+- Right-click a face to turn it clockwise.
+- Drag with the left mouse button to pan.
+- Scroll up to zoom in or down to zoom out. Zoom is limited to 50% through
+  250%.
+- Use Ctrl+Z to undo and Ctrl+Y or Ctrl+Shift+Z to redo. Both commands use the
+  normal turn animation.
+- Close the window, for example with Alt+F4 on Windows, to exit.
+
+A turn lasts for the configured duration and temporarily locks other board
+controls.
+
+### Starting and finishing a game
+
+Start a scored game from **Puzzle → Scrumble** and choose 3, 5, 10, or 50
+moves. Scrambling resets the board, applies the selected number of random turns,
+and starts the move counter. Solving the board ends the game and reports the
+number of player moves. **Puzzle → Reset** returns to the solved board without
+starting a new game. Turns made before scrambling are available for free play
+and are not counted.
+
+### Macros
 
 Up to ten face-relative macros can be stored in slots 0 through 9:
 
@@ -98,6 +127,8 @@ Up to ten face-relative macros can be stored in slots 0 through 9:
 - Escape clears the selected faces. An ordinary face turn clears them as well;
   completed macro playback keeps them selected for another run.
 
+### Setup Moves
+
 Use **F1** to start recording a Setup Move and **F2** to stop recording it.
 Ending an empty recording discards it immediately.
 Pressing F1 again during recording discards the recorded sequence and starts
@@ -109,34 +140,13 @@ the unwind starts, so F3 cannot apply it twice and F1 can begin a new Setup
 Move. An active Setup Move, including whether it is still being recorded, is
 stored in game save files and restored when the save is opened.
 
-Macro slots are kept in `settings.json` using readable relative moves. A number
-identifies a selected face, an apostrophe means counterclockwise, and moves may
-be separated by hyphens or spaces. For example:
-
-```json
-{
-  "turn_animation_duration_seconds": 0.5,
-  "macros": {
-    "0": "1-2'-1'-2"
-  }
-}
-```
-
-On startup, the game loads `settings.json` from the current directory. If the
-file does not exist, it creates one with the default settings. The animation
-duration defaults to 0.5 seconds, and absent macro slots are empty:
-
-```json
-{
-  "turn_animation_duration_seconds": 0.5,
-  "macros": {}
-}
-```
+### Saving and loading
 
 Use **File → Save** (Ctrl+S) or **File → Save As** to write the current board,
-active-game flag, used-move count, and active Setup Move to a versioned JSON file. Use
-**File → Open** (Ctrl+O) to restore that file later. Loading a game clears the
-previous session's undo/redo history and any transient animation or macro state.
+active-game flag, used-move count, and active Setup Move to a versioned JSON
+file. Use **File → Open** (Ctrl+O) to restore that file later. Loading a game
+clears the previous session's undo/redo history and any transient animation or
+macro state.
 
 ## Tests
 
@@ -150,7 +160,7 @@ Source code uses a maximum line length of 110 characters. Keep calls with
 several arguments on one line when they fit within that limit; wrap them only
 when they do not. 
 
-Leave two blank lines between module-level functions and Sclasses. 
+Leave two blank lines between module-level functions and classes.
 
 ## License
 
