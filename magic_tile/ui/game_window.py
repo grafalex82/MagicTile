@@ -331,13 +331,15 @@ class GameBoardWidget(QWidget):
                 else self.setup_history_floor or 0
             ),
         )
-        self._apply_history_command(self.turn_history.undo(minimum), now)
+        self._apply_history_command(
+            self.turn_history.undo(minimum), now, move_count_change=-1
+        )
 
     def redo(self, *, now: float | None = None) -> None:
         """Redo one turn through the shared animated history path."""
         if self.animation is not None or self.playback_active:
             return
-        self._apply_history_command(self.turn_history.redo(), now)
+        self._apply_history_command(self.turn_history.redo(), now, move_count_change=1)
 
     def reset(self) -> None:
         """Return to the initial board state and leave game mode."""
@@ -452,7 +454,7 @@ class GameBoardWidget(QWidget):
         self.setup_recording_history = None
         self.setup_history_floor = None
         self.turn_queue.extend(
-            _QueuedTurn(command, record_history=True, count_player_move=False)
+            _QueuedTurn(command, record_history=True)
             for command in rollback_commands
         )
         self.playback_active = bool(self.turn_queue)
@@ -463,13 +465,23 @@ class GameBoardWidget(QWidget):
             self._check_for_win(current)
         self.update()
 
-    def _apply_history_command(self, command: TurnCommand | None, now: float | None) -> None:
+    def _apply_history_command(
+        self,
+        command: TurnCommand | None,
+        now: float | None,
+        *,
+        move_count_change: int,
+    ) -> None:
         """Animate a command returned by undo or redo and refresh recording state."""
         if command is not None:
             self.macro_selection.clear()
             self._synchronize_recording()
             self._synchronize_setup_move()
             self._begin_animation(command, time.monotonic() if now is None else now)
+            if move_count_change < 0:
+                self._uncount_player_move()
+            else:
+                self._count_player_move()
         self.update()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt virtual method
@@ -625,6 +637,11 @@ class GameBoardWidget(QWidget):
         self.move_count += 1
         if check_for_win:
             self._check_for_win(time.monotonic())
+
+    def _uncount_player_move(self) -> None:
+        """Remove one scored turn while undoing a move in an active game."""
+        if self.game_active:
+            self.move_count = max(0, self.move_count - 1)
 
     def _check_for_win(self, now: float) -> None:
         """Finish the active game when the board reaches its solved state."""

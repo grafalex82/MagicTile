@@ -56,8 +56,8 @@ A scored game begins when the player chooses a scramble of 3, 5, 10, or 50
 moves from the Puzzle menu. The board is reset before those random turns are
 applied. The player then solves the puzzle so that every face consists entirely
 of pieces of its own color. Direct face turns and turns played by macros
-contribute to the move counter. Undo/redo does not adjust the counter, and
-Setup Move unwind turns are not counted. Reaching the solved state ends the
+contribute to the move counter. Undo decrements the counter, while redo and
+each Setup Move unwind turn increment it. Reaching the solved state ends the
 game and displays the final move count.
 
 ### Controls

@@ -386,6 +386,44 @@ def test_solving_active_game_shows_move_count(widget, monkeypatch) -> None:
     assert not widget.status_is_error
 
 
+def test_undo_and_redo_adjust_the_active_game_move_count(widget, monkeypatch) -> None:
+    coordinate = HexCoordinate(0, 0)
+    choices = iter((coordinate, TurnDirection.CLOCKWISE) * 3)
+    monkeypatch.setattr("magic_tile.ui.game_window.random.choice", lambda values: next(choices))
+    command = TurnCommand(coordinate, TurnDirection.CLOCKWISE)
+    widget.scrumble()
+    widget._perform_new_turn(command)
+    _finish_turns(widget)
+    assert widget.move_count == 1
+
+    widget.undo(now=2.0)
+    assert widget.move_count == 0
+    _finish_turns(widget)
+
+    widget.redo(now=3.0)
+    assert widget.move_count == 1
+
+
+def test_unwinding_setup_move_counts_each_animated_turn_in_an_active_game(widget, monkeypatch) -> None:
+    scramble_coordinate = HexCoordinate(0, 0)
+    choices = iter((scramble_coordinate, TurnDirection.CLOCKWISE) * 3)
+    monkeypatch.setattr("magic_tile.ui.game_window.random.choice", lambda values: next(choices))
+    first = TurnCommand(HexCoordinate(0, 0), TurnDirection.CLOCKWISE)
+    second = TurnCommand(HexCoordinate(1, 0), TurnDirection.COUNTERCLOCKWISE)
+    widget.scrumble()
+    widget.start_setup_move(now=1.0)
+    for command in (first, second):
+        widget._perform_new_turn(command)
+        _finish_turns(widget)
+    widget.end_setup_move(now=2.0)
+    assert widget.move_count == 2
+
+    widget.unwind_setup_move(now=3.0)
+    _finish_turns(widget)
+
+    assert widget.move_count == 4
+
+
 def test_reverse_macro_menu_action_uses_inverse_turns(application) -> None:
     settings = Settings(turn_animation_duration_seconds=0.001).with_macro(0, parse_macro("1"))
     window = GameWindow(settings)
