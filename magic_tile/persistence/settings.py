@@ -7,6 +7,7 @@ import math
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from magic_tile.domain import BoardMode
 from magic_tile.input.macros import (
     MACRO_SLOT_COUNT,
     Macro,
@@ -24,8 +25,11 @@ class Settings:
 
     turn_animation_duration_seconds: float = DEFAULT_TURN_ANIMATION_DURATION_SECONDS
     macros: tuple[Macro | None, ...] = field(default_factory=lambda: (None,) * MACRO_SLOT_COUNT)
+    game_mode: BoardMode = BoardMode.TORUS
 
     def __post_init__(self) -> None:
+        if not isinstance(self.game_mode, BoardMode):
+            raise TypeError("game_mode must be a BoardMode")
         if len(self.macros) != MACRO_SLOT_COUNT:
             raise ValueError("settings must contain exactly 10 macro slots")
         if any(macro is not None and not isinstance(macro, Macro) for macro in self.macros):
@@ -38,6 +42,12 @@ class Settings:
         macros = list(self.macros)
         macros[slot] = macro
         return replace(self, macros=tuple(macros))
+
+    def with_game_mode(self, game_mode: BoardMode) -> Settings:
+        """Return settings with the startup game mode replaced."""
+        if not isinstance(game_mode, BoardMode):
+            raise TypeError("game_mode must be a BoardMode")
+        return replace(self, game_mode=game_mode)
 
 
 def load_settings(directory: Path | None = None) -> Settings:
@@ -67,6 +77,12 @@ def load_settings(directory: Path | None = None) -> Settings:
     if not math.isfinite(duration) or duration <= 0:
         raise ValueError("'turn_animation_duration_seconds' must be greater than zero.")
 
+    raw_game_mode = data.get("game_mode", BoardMode.TORUS.value)
+    try:
+        game_mode = BoardMode(raw_game_mode)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"Unknown game mode: {raw_game_mode!r}.") from error
+
     raw_macros = data.get("macros", {})
     if not isinstance(raw_macros, dict):
         raise ValueError("'macros' must be an object whose keys are slots from 0 to 9.")
@@ -81,7 +97,11 @@ def load_settings(directory: Path | None = None) -> Settings:
         except ValueError as error:
             raise ValueError(f"Invalid macro in slot {raw_slot}: {error}") from error
 
-    return Settings(turn_animation_duration_seconds=float(duration), macros=tuple(macros))
+    return Settings(
+        turn_animation_duration_seconds=float(duration),
+        macros=tuple(macros),
+        game_mode=game_mode,
+    )
 
 
 def _write_default_settings(settings_path: Path, settings: Settings) -> None:
@@ -101,6 +121,7 @@ def _write_settings(settings_path: Path, settings: Settings) -> None:
     """Write a complete, human-editable settings document."""
     data = {
         "turn_animation_duration_seconds": settings.turn_animation_duration_seconds,
+        "game_mode": settings.game_mode.value,
         "macros": {
             str(slot): serialize_macro(macro)
             for slot, macro in enumerate(settings.macros)

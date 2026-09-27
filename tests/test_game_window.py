@@ -314,6 +314,8 @@ def test_view_actions_toggle_piece_dimming_and_refresh_static_cache(application)
 def test_switching_mode_resets_free_play_without_confirmation(application, monkeypatch) -> None:
     window = GameWindow(Settings())
     window.board_widget._frame_timer.stop()
+    saved_settings = []
+    monkeypatch.setattr("magic_tile.ui.game_window.save_settings", saved_settings.append)
     window.board_widget._perform_new_turn(
         TurnCommand(HexCoordinate(0, 0), TurnDirection.CLOCKWISE)
     )
@@ -329,12 +331,25 @@ def test_switching_mode_resets_free_play_without_confirmation(application, monke
     assert window.board_widget.board.mode is BoardMode.KLEIN_BOTTLE
     assert window.board_widget.board.is_solved()
     assert window.mode_actions[BoardMode.KLEIN_BOTTLE].isChecked()
+    assert window.board_widget.settings.game_mode is BoardMode.KLEIN_BOTTLE
+    assert [settings.game_mode for settings in saved_settings] == [BoardMode.KLEIN_BOTTLE]
+    window.close()
+
+
+def test_window_starts_in_mode_from_settings(application) -> None:
+    window = GameWindow(Settings(game_mode=BoardMode.KLEIN_BOTTLE))
+    window.board_widget._frame_timer.stop()
+
+    assert window.board_widget.board.mode is BoardMode.KLEIN_BOTTLE
+    assert window.mode_actions[BoardMode.KLEIN_BOTTLE].isChecked()
+    assert window.statusBar().currentMessage().startswith("Mode: Klein bottle")
     window.close()
 
 
 def test_switching_mode_during_scored_game_requires_confirmation(application, monkeypatch) -> None:
     window = GameWindow(Settings())
     window.board_widget._frame_timer.stop()
+    monkeypatch.setattr("magic_tile.ui.game_window.save_settings", lambda settings: None)
     window.board_widget.scrumble()
     monkeypatch.setattr(
         "magic_tile.ui.game_window.QMessageBox.question",

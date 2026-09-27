@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from magic_tile.domain import BoardMode
 from magic_tile.input import parse_macro, serialize_macro
 from magic_tile.persistence.settings import (
     DEFAULT_TURN_ANIMATION_DURATION_SECONDS,
@@ -18,8 +19,10 @@ def test_missing_settings_file_is_created_with_defaults(tmp_path) -> None:
     settings_path = tmp_path / SETTINGS_FILENAME
     assert settings_path.exists()
     assert settings.turn_animation_duration_seconds == (DEFAULT_TURN_ANIMATION_DURATION_SECONDS)
+    assert settings.game_mode is BoardMode.TORUS
     assert json.loads(settings_path.read_text(encoding="utf-8")) == {
         "turn_animation_duration_seconds": 0.5,
+        "game_mode": "torus",
         "macros": {},
     }
 
@@ -30,7 +33,27 @@ def test_settings_file_overrides_animation_duration(tmp_path) -> None:
     settings = load_settings(tmp_path)
 
     assert settings.turn_animation_duration_seconds == 1.25
+    assert settings.game_mode is BoardMode.TORUS
     assert settings.macros == (None,) * 10
+
+
+def test_game_mode_is_loaded_and_saved(tmp_path) -> None:
+    (tmp_path / SETTINGS_FILENAME).write_text(
+        json.dumps(
+            {
+                "turn_animation_duration_seconds": 0.5,
+                "game_mode": "klein_bottle",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(tmp_path)
+
+    assert settings.game_mode is BoardMode.KLEIN_BOTTLE
+    save_settings(settings, tmp_path)
+    persisted = json.loads((tmp_path / SETTINGS_FILENAME).read_text(encoding="utf-8"))
+    assert persisted["game_mode"] == "klein_bottle"
 
 
 def test_macros_are_loaded_and_saved_in_canonical_notation(tmp_path) -> None:
@@ -89,6 +112,22 @@ def test_application_loads_settings_before_opening_window(monkeypatch) -> None:
 def test_invalid_animation_duration_is_rejected(tmp_path, duration) -> None:
     (tmp_path / SETTINGS_FILENAME).write_text(
         json.dumps({"turn_animation_duration_seconds": duration}), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError):
+        load_settings(tmp_path)
+
+
+@pytest.mark.parametrize("game_mode", ("sphere", 1, None))
+def test_invalid_game_mode_is_rejected(tmp_path, game_mode) -> None:
+    (tmp_path / SETTINGS_FILENAME).write_text(
+        json.dumps(
+            {
+                "turn_animation_duration_seconds": 0.5,
+                "game_mode": game_mode,
+            }
+        ),
+        encoding="utf-8",
     )
 
     with pytest.raises(ValueError):

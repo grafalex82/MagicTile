@@ -102,7 +102,7 @@ class GameBoardWidget(QWidget):
 
         # Create the persistent game services and the board being displayed.
         self.settings = settings
-        self.board = PeriodicBoard() if board is None else board
+        self.board = PeriodicBoard(settings.game_mode) if board is None else board
         self.camera = Camera()
         self.turn_history = TurnHistory()
 
@@ -1054,6 +1054,19 @@ class GameWindow(QMainWindow):
             if answer != QMessageBox.StandardButton.Yes:
                 self._synchronize_mode_actions()
                 return
+
+        new_settings = self.board_widget.settings.with_game_mode(mode)
+        try:
+            save_settings(new_settings)
+        except OSError as error:
+            self.board_widget._show_status(
+                f"Could not save game mode: {error}", True, time.monotonic(), 5.0
+            )
+            self._synchronize_mode_actions()
+            self.board_widget.update()
+            return
+
+        self.board_widget.settings = new_settings
         self.board_widget.set_mode(mode)
         self.current_save_path = None
         self._synchronize_mode_actions()

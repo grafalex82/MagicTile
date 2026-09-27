@@ -102,15 +102,20 @@ The application menu is organized as follows:
 ### Settings
 
 On startup, the game loads `settings.json` from the current directory. If the
-file does not exist, it creates one with the default animation duration of 0.5
-seconds and no recorded macros:
+file does not exist, it creates one with the default torus game mode, animation
+duration of 0.5 seconds, and no recorded macros:
 
 ```json
 {
   "turn_animation_duration_seconds": 0.5,
+  "game_mode": "torus",
   "macros": {}
 }
 ```
+
+Selecting a mode writes `torus` or `klein_bottle` to this file. The next
+application launch starts directly in that mode. Existing settings files
+without `game_mode` remain compatible and default to the torus.
 
 Macro slots use readable relative moves. A number identifies a selected face,
 an apostrophe means counterclockwise, and moves may be separated by hyphens or
@@ -119,6 +124,7 @@ spaces. For example:
 ```json
 {
   "turn_animation_duration_seconds": 0.5,
+  "game_mode": "torus",
   "macros": {
     "0": "1-2'-1'-2"
   }
