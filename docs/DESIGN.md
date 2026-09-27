@@ -92,7 +92,8 @@ and undo/redo state.
 The application menu is organized as follows:
 
 - **File:** Open, Save, Save As, and Quit.
-- **Puzzle:** Reset, Scrumble with 3/5/10/50 moves, Undo, and Redo.
+- **Puzzle:** Mode (Torus or Klein bottle), Reset, Scrumble with 3/5/10/50
+  moves, Undo, and Redo.
 - **Macro:** record and play slots 0–9, play them in reverse, and control Setup
   Moves.
 

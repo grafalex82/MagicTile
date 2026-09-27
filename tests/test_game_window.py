@@ -218,7 +218,6 @@ def test_main_menu_has_requested_structure_and_game_file_commands(application) -
     assert [action.text() for action in window.menuBar().actions()] == [
         "File",
         "Puzzle",
-        "Mode",
         "View",
         "Macro",
     ]
@@ -230,6 +229,7 @@ def test_main_menu_has_requested_structure_and_game_file_commands(application) -
         "Quit",
     ]
     assert [action.text() for action in window.puzzle_menu.actions()] == [
+        "Mode",
         "Reset",
         "Scrumble",
         "",

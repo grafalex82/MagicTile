@@ -1086,17 +1086,16 @@ class GameWindow(QMainWindow):
         self.file_menu.addAction(self.quit_action)
 
         self.puzzle_menu = menu_bar.addMenu("Puzzle")
+        self.mode_menu = self.puzzle_menu.addMenu("Mode")
+        self.mode_menu.addActions(
+            (self.mode_actions[BoardMode.TORUS], self.mode_actions[BoardMode.KLEIN_BOTTLE])
+        )
         self.puzzle_menu.addAction(self.reset_action)
         self.scrumble_menu = self.puzzle_menu.addMenu("Scrumble")
         self.scrumble_menu.addActions(self.scrumble_actions)
         self.scrumble_action = self.scrumble_menu.menuAction()
         self.puzzle_menu.addSeparator()
         self.puzzle_menu.addActions((self.undo_action, self.redo_action))
-
-        self.mode_menu = menu_bar.addMenu("Mode")
-        self.mode_menu.addActions(
-            (self.mode_actions[BoardMode.TORUS], self.mode_actions[BoardMode.KLEIN_BOTTLE])
-        )
 
         self.view_menu = menu_bar.addMenu("View")
         self.view_menu.addActions((self.dim_edges_action, self.dim_corners_action))
