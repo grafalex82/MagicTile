@@ -23,7 +23,7 @@ from magic_tile.ui.game_window import (
     draw_status_message,
     render_board,
 )
-from magic_tile.ui.qt_renderer import _cell_geometries
+from magic_tile.ui.qt_renderer import _cell_geometries, _color
 from magic_tile.ui.turn_animation import TurnAnimation
 
 
@@ -167,6 +167,21 @@ def test_static_face_cache_tracks_colors_read_from_mutable_face() -> None:
     assert _image_bytes(after) != _image_bytes(before)
 
 
+def test_edge_and_corner_dimming_change_rendered_colors_independently() -> None:
+    board = PeriodicBoard()
+    camera = Camera(320, 240)
+    normal = render_board((640, 480), board=board, camera=camera)
+    dim_edges = render_board((640, 480), board=board, camera=camera, dim_edges=True)
+    dim_corners = render_board((640, 480), board=board, camera=camera, dim_corners=True)
+
+    assert _image_bytes(dim_edges) != _image_bytes(normal)
+    assert _image_bytes(dim_corners) != _image_bytes(normal)
+    assert _image_bytes(dim_edges) != _image_bytes(dim_corners)
+    assert _color(board.faces[0].color, dimmed=True).lightness() < _color(
+        board.faces[0].color
+    ).lightness()
+
+
 def test_animation_start_reuses_the_already_rendered_static_background(widget) -> None:
     initial_frame = QImage(640, 480, QImage.Format.Format_ARGB32_Premultiplied)
     widget.render(initial_frame)
@@ -204,6 +219,7 @@ def test_main_menu_has_requested_structure_and_game_file_commands(application) -
         "File",
         "Puzzle",
         "Mode",
+        "View",
         "Macro",
     ]
     assert [action.text() for action in window.file_menu.actions()] == [
@@ -231,6 +247,14 @@ def test_main_menu_has_requested_structure_and_game_file_commands(application) -
         "Klein bottle mode",
     ]
     assert window.mode_actions[BoardMode.TORUS].isChecked()
+    assert [action.text() for action in window.view_menu.actions()] == [
+        "Dim Edges",
+        "Dim Corners",
+    ]
+    assert window.dim_edges_action.isCheckable()
+    assert window.dim_corners_action.isCheckable()
+    assert not window.dim_edges_action.isChecked()
+    assert not window.dim_corners_action.isChecked()
     assert [action.text() for action in window.macro_menu.actions()] == [
         "Record",
         "Play",
@@ -261,6 +285,29 @@ def test_main_menu_has_requested_structure_and_game_file_commands(application) -
         "Mode: Torus   |   Edges: 21/21   |   Corners: 14/14"
     )
 
+    window.close()
+
+
+def test_view_actions_toggle_piece_dimming_and_refresh_static_cache(application) -> None:
+    window = GameWindow(Settings())
+    widget = window.board_widget
+    widget._frame_timer.stop()
+    initial = QImage(640, 480, QImage.Format.Format_ARGB32_Premultiplied)
+    widget.resize(640, 480)
+    widget.render(initial)
+    assert widget._static_cache is not None
+
+    window.dim_edges_action.trigger()
+    assert window.dim_edges_action.isChecked()
+    assert widget.dim_edges
+    assert widget._static_cache is None
+
+    window.dim_corners_action.trigger()
+    assert window.dim_corners_action.isChecked()
+    assert widget.dim_corners
+    window.dim_edges_action.trigger()
+    assert not widget.dim_edges
+    assert widget.dim_corners
     window.close()
 
 

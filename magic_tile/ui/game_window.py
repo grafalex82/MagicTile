@@ -133,6 +133,8 @@ class GameBoardWidget(QWidget):
         self.status_until = 0.0
         self.mouse_inside = False
         self.mouse_position = (0, 0)
+        self.dim_edges = False
+        self.dim_corners = False
 
         # Retain the expensive static board layer until its inputs change.
         self._static_cache_view_key = None
@@ -211,7 +213,13 @@ class GameBoardWidget(QWidget):
             # Rebuild the static board only when its viewport or settled model
             # state changes, or when animation completion requests a refresh.
             viewport = (self.width(), self.height())
-            view_key = (viewport, self.camera.offset, self.camera.zoom)
+            view_key = (
+                viewport,
+                self.camera.offset,
+                self.camera.zoom,
+                self.dim_edges,
+                self.dim_corners,
+            )
             board_state = self.board.sticker_state()
             cache_is_stale = self.animation is None and board_state != self._static_cache_state
             if (
@@ -220,7 +228,13 @@ class GameBoardWidget(QWidget):
                 or cache_is_stale
                 or self._force_static_refresh
             ):
-                self._static_cache = render_static_board(viewport, self.board, self.camera)
+                self._static_cache = render_static_board(
+                    viewport,
+                    self.board,
+                    self.camera,
+                    dim_edges=self.dim_edges,
+                    dim_corners=self.dim_corners,
+                )
                 self._static_cache_view_key = view_key
                 self._static_cache_state = board_state
                 self._force_static_refresh = False
@@ -251,6 +265,8 @@ class GameBoardWidget(QWidget):
                     else self.macro_selection.face_numbers
                 ),
                 static_background=self._static_cache,
+                dim_edges=self.dim_edges,
+                dim_corners=self.dim_corners,
             )
 
             # Draw macro-recording information independently from the board.
@@ -352,6 +368,28 @@ class GameBoardWidget(QWidget):
         self.game_active = False
         self.move_count = 0
         self.status_changed.emit()
+        self.update()
+
+    def set_dim_edges(self, enabled: bool) -> None:
+        """Draw edge pieces with subdued dark colors when enabled."""
+        self._set_piece_dimming(edges=enabled)
+
+    def set_dim_corners(self, enabled: bool) -> None:
+        """Draw corner pieces with subdued dark colors when enabled."""
+        self._set_piece_dimming(corners=enabled)
+
+    def _set_piece_dimming(
+        self,
+        *,
+        edges: bool | None = None,
+        corners: bool | None = None,
+    ) -> None:
+        """Update piece-color presentation and invalidate the static layer."""
+        if edges is not None:
+            self.dim_edges = bool(edges)
+        if corners is not None:
+            self.dim_corners = bool(corners)
+        self._static_cache = None
         self.update()
 
     def set_mode(self, mode: BoardMode) -> None:
@@ -903,6 +941,16 @@ class GameWindow(QMainWindow):
         }
         self._synchronize_mode_actions()
 
+        self.dim_edges_action = QAction("Dim Edges", self)
+        self.dim_edges_action.setObjectName("dim_edges_action")
+        self.dim_edges_action.setCheckable(True)
+        self.dim_edges_action.toggled.connect(self.board_widget.set_dim_edges)
+
+        self.dim_corners_action = QAction("Dim Corners", self)
+        self.dim_corners_action.setObjectName("dim_corners_action")
+        self.dim_corners_action.setCheckable(True)
+        self.dim_corners_action.toggled.connect(self.board_widget.set_dim_corners)
+
     def open_game(self) -> None:
         """Choose a save file and replace the current game with its contents."""
         filename, _ = QFileDialog.getOpenFileName(self, "Open MagicTile Game", "", GAME_SAVE_FILTER)
@@ -1052,6 +1100,9 @@ class GameWindow(QMainWindow):
         self.mode_menu.addActions(
             (self.mode_actions[BoardMode.TORUS], self.mode_actions[BoardMode.KLEIN_BOTTLE])
         )
+
+        self.view_menu = menu_bar.addMenu("View")
+        self.view_menu.addActions((self.dim_edges_action, self.dim_corners_action))
 
         self.macro_menu = menu_bar.addMenu("Macro")
         self.record_menu = self.macro_menu.addMenu("Record")

@@ -29,6 +29,7 @@ PANEL_TEXT = QColor("#ffffff")
 ERROR_BACKGROUND = QColor(150, 28, 28, 235)
 INFO_BACKGROUND = QColor(24, 92, 48, 235)
 TURN_GUIDE_DIAMETER_SCALE = 1.55
+DIM_COLOR_FACTOR = 0.28
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +54,8 @@ def draw_board(
     now: float | None = None,
     macro_face_numbers: dict[Face, int] | None = None,
     static_background: QImage | None = None,
+    dim_edges: bool = False,
+    dim_corners: bool = False,
 ) -> None:
     """Draw a complete static or animated frame into an active painter."""
     # Configure high-quality drawing and derive viewport geometry from the camera.
@@ -66,14 +69,32 @@ def draw_board(
     # Draw or reuse the static board beneath all dynamic layers.
     if static_background is None:
         painter.fillRect(QRectF(0, 0, viewport[0], viewport[1]), BACKGROUND)
-        _draw_faces(painter, board, visible, height, zoom)
+        _draw_faces(
+            painter,
+            board,
+            visible,
+            height,
+            zoom,
+            dim_edges=dim_edges,
+            dim_corners=dim_corners,
+        )
     else:
         painter.drawImage(QPointF(0, 0), static_background)
 
     # Composite the moving turn disk when a turn is active.
     if animation is not None:
         current = time.monotonic() if now is None else now
-        _draw_turn_animation(painter, board, visible, animation, current, height, zoom)
+        _draw_turn_animation(
+            painter,
+            board,
+            visible,
+            animation,
+            current,
+            height,
+            zoom,
+            dim_edges=dim_edges,
+            dim_corners=dim_corners,
+        )
 
     # Add persistent face numbers used by macro recording and playback.
     guide_radius = round(HEX_HEIGHT * zoom * TURN_GUIDE_DIAMETER_SCALE / 2)
@@ -123,6 +144,9 @@ def render_static_board(
     viewport: tuple[int, int],
     board: PeriodicBoard,
     camera: Camera,
+    *,
+    dim_edges: bool = False,
+    dim_corners: bool = False,
 ) -> QImage:
     """Render the cacheable board layer without animation or overlays."""
     # Allocate and clear an image matching the current viewport.
@@ -134,14 +158,31 @@ def render_static_board(
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         height = max(1, round(HEX_HEIGHT * camera.zoom))
         visible = list(visible_hexes(viewport, height=HEX_HEIGHT * camera.zoom, offset=camera.offset))
-        _draw_faces(painter, board, visible, height, camera.zoom)
+        _draw_faces(
+            painter,
+            board,
+            visible,
+            height,
+            camera.zoom,
+            dim_edges=dim_edges,
+            dim_corners=dim_corners,
+        )
     finally:
         # Release the image painter even if rendering fails.
         painter.end()
     return image
 
 
-def _draw_faces(painter, board, visible, height: int, zoom: float) -> None:
+def _draw_faces(
+    painter,
+    board,
+    visible,
+    height: int,
+    zoom: float,
+    *,
+    dim_edges: bool = False,
+    dim_corners: bool = False,
+) -> None:
     for q, r, center in visible:
         # Resolve the logical face and reuse its cached raster image.
         occurrence = board.occurrence_at(HexCoordinate(q, r))
@@ -150,6 +191,8 @@ def _draw_faces(painter, board, visible, height: int, zoom: float) -> None:
             occurrence.face,
             zoom,
             occurrence.mirrored,
+            dim_edges,
+            dim_corners,
         )
 
         # Center the face image on this periodic screen-space occurrence.
@@ -167,10 +210,22 @@ def _render_face_image(
     face: Face,
     zoom: float,
     mirrored: bool = False,
+    dim_edges: bool = False,
+    dim_corners: bool = False,
 ) -> QImage:
     """Render one reusable static face image for all of its periodic copies."""
     # Include current colors in the internal key because Face is mutable.
-    cache_key = (height, face, face.color, face.edge_colors, face.corner_colors, zoom, mirrored)
+    cache_key = (
+        height,
+        face,
+        face.color,
+        face.edge_colors,
+        face.corner_colors,
+        zoom,
+        mirrored,
+        dim_edges,
+        dim_corners,
+    )
     cached_image = _FACE_IMAGE_CACHE.get(cache_key)
     if cached_image is not None:
         _FACE_IMAGE_CACHE.move_to_end(cache_key)
@@ -195,7 +250,15 @@ def _render_face_image(
     try:
         image_painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         image_painter.translate(half_width, half_height)
-        _draw_cell(image_painter, face, geometry, zoom, mirrored=mirrored)
+        _draw_cell(
+            image_painter,
+            face,
+            geometry,
+            zoom,
+            mirrored=mirrored,
+            dim_edges=dim_edges,
+            dim_corners=dim_corners,
+        )
     finally:
         # Finalize the cached image on both success and failure.
         image_painter.end()
@@ -215,6 +278,8 @@ def _draw_cell(
     overrides: dict[tuple[Face, str, int], FaceColor] | None = None,
     *,
     mirrored: bool = False,
+    dim_edges: bool = False,
+    dim_corners: bool = False,
 ) -> None:
     # Fill the fixed center color as the base of the cell.
     overrides = overrides or {}
@@ -227,14 +292,24 @@ def _draw_cell(
     for screen_index, points in enumerate(geometry.edges):
         if len(points) >= 3:
             index = (1 - screen_index) % 6 if mirrored else screen_index
-            painter.setBrush(_color(overrides.get((face, "edge", index), face.edge_colors[index])))
+            painter.setBrush(
+                _color(
+                    overrides.get((face, "edge", index), face.edge_colors[index]),
+                    dimmed=dim_edges,
+                )
+            )
             painter.drawPolygon(points)
 
     # Overlay corner pieces after edges so their intersections stay visible.
     for screen_index, points in enumerate(geometry.corners):
         if len(points) >= 3:
             index = (-screen_index) % 6 if mirrored else screen_index
-            painter.setBrush(_color(overrides.get((face, "corner", index), face.corner_colors[index])))
+            painter.setBrush(
+                _color(
+                    overrides.get((face, "corner", index), face.corner_colors[index]),
+                    dimmed=dim_corners,
+                )
+            )
             painter.drawPolygon(points)
 
     # Clip and draw the six curved internal piece boundaries inside the hexagon.
@@ -255,7 +330,18 @@ def _draw_cell(
     painter.drawPolygon(vertices)
 
 
-def _draw_turn_animation(painter, board, visible, animation, now, height, zoom) -> None:
+def _draw_turn_animation(
+    painter,
+    board,
+    visible,
+    animation,
+    now,
+    height,
+    zoom,
+    *,
+    dim_edges: bool = False,
+    dim_corners: bool = False,
+) -> None:
     # Resolve the moving faces and current eased rotation geometry.
     turning_faces = set(animation.turning_faces)
     radius = round(HEX_HEIGHT * zoom * TURN_GUIDE_DIAMETER_SCALE / 2)
@@ -276,7 +362,15 @@ def _draw_turn_animation(painter, board, visible, animation, now, height, zoom) 
     for (_, mirrored), (coordinate, centers) in occurrences.items():
         visual_angle = -angle if mirrored else angle
         turn_image = _render_turn_image(
-            animation, board, coordinate, visual_angle, height, zoom, radius
+            animation,
+            board,
+            coordinate,
+            visual_angle,
+            height,
+            zoom,
+            radius,
+            dim_edges=dim_edges,
+            dim_corners=dim_corners,
         )
         half_width = turn_image.width() // 2
         half_height = turn_image.height() // 2
@@ -287,7 +381,18 @@ def _draw_turn_animation(painter, board, visible, animation, now, height, zoom) 
             )
 
 
-def _render_turn_image(animation, board, coordinate, angle, height, zoom, radius) -> QImage:
+def _render_turn_image(
+    animation,
+    board,
+    coordinate,
+    angle,
+    height,
+    zoom,
+    radius,
+    *,
+    dim_edges: bool = False,
+    dim_corners: bool = False,
+) -> QImage:
     """Render one moving disk for reuse at every visible periodic copy."""
     # Create a transparent odd-sized canvas with room for boundary strokes.
     padding = max(3, round(GRID_WIDTH * zoom / 2) + 1)
@@ -313,6 +418,8 @@ def _render_turn_image(animation, board, coordinate, angle, height, zoom, radius
                 zoom,
                 animation.source_colors,
                 mirrored=occurrence.mirrored,
+                dim_edges=dim_edges,
+                dim_corners=dim_corners,
             )
 
         # Apply a pixel-aligned alpha mask after drawing the full moving region.
@@ -427,8 +534,11 @@ def _piece_grid_width(zoom: float) -> int:
     return max(1, round(PIECE_GRID_WIDTH * zoom))
 
 
-def _color(color: FaceColor) -> QColor:
-    return QColor(*color.rgb)
+def _color(color: FaceColor, *, dimmed: bool = False) -> QColor:
+    """Return a display color, optionally reduced to a subdued dark tone."""
+    if not dimmed:
+        return QColor(*color.rgb)
+    return QColor(*(round(component * DIM_COLOR_FACTOR) for component in color.rgb))
 
 
 def _polygon(points) -> QPolygonF:

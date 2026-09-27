@@ -162,6 +162,19 @@ Run the command from the directory where `settings.json` should be stored.
 A turn lasts for the configured duration and temporarily locks other board
 controls.
 
+### View options
+
+The **View** menu contains two independent display aids:
+
+- **Dim Edges** draws edge pieces in subdued dark colors.
+- **Dim Corners** draws corner pieces in subdued dark colors.
+
+These options make the puzzle easier to assemble by reducing visual clutter.
+For example, enable **Dim Corners** while solving the edges so the corner
+pieces do not get in the way; enable **Dim Edges** when you want to concentrate
+on the corners. The center colors remain unchanged, and either or both options
+can be enabled at any time.
+
 ### Starting and finishing a game
 
 Start a scored game from **Puzzle → Scrumble** and choose 3, 5, 10, or 50
