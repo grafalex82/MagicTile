@@ -244,6 +244,11 @@ when they do not.
 
 Leave two blank lines between module-level functions and classes.
 
+## Credits
+
+- The game idea is entirely based on the [MagicTile puzzle collection](https://roice3.org/magictile/).
+- Mathologer made an excellent video describing similar puzzles: [Magic Tile / Permutation Puzzle](https://www.youtube.com/watch?v=DvZnh7-nslo).
+
 ## License
 
 The source code is available under the [MIT License](LICENSE). It is a short,
