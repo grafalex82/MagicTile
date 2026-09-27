@@ -73,9 +73,11 @@ game and displays the final move count.
   and F3 plays it once in reverse order and direction before clearing it.
 
 Pressing F1 during an active recording restarts it at the current history
-position. Escape cancels the recording without modifying the board. Macro
-playback is allowed during recording, and each expanded macro turn is appended
-to the active setup sequence so F3 unwinds it with the other setup turns.
+position. Escape cancels the recording without modifying the board, except that
+a retained macro-face selection takes priority and is cleared by the first
+press while setup recording remains active. Macro playback is allowed during
+recording, and each expanded macro turn is appended to the active setup
+sequence so F3 unwinds it with the other setup turns.
 
 An active setup sequence remains independent of the formula or macro played
 after F2 and is included in game saves together with its recording state.

@@ -725,6 +725,20 @@ class GameBoardWidget(QWidget):
         )
 
     def _handle_escape(self, now: float) -> None:
+        # While recording a Setup Move, dismiss a retained macro-face selection
+        # before treating Escape as a request to cancel the setup recording.
+        # Resolved playback commands no longer depend on the selection, so it
+        # is also safe to clear while their atomic queue is still running.
+        if (
+            self.setup_move is not None
+            and self.setup_move.recording
+            and self.macro_selection
+        ):
+            self.macro_selection.clear()
+            self.status_message = None
+            self.update()
+            return
+
         # Macro playback is intentionally atomic and cannot be canceled.
         if self.playback_active:
             return

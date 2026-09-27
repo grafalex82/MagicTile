@@ -734,6 +734,31 @@ def test_macro_playback_is_recorded_in_live_setup_move_and_unwound(widget) -> No
     assert widget.setup_move is None
 
 
+def test_escape_during_setup_macro_playback_clears_faces_without_canceling_setup(widget) -> None:
+    first = HexCoordinate(0, 0)
+    second = HexCoordinate(1, 0)
+    widget.settings = widget.settings.with_macro(4, parse_macro("1-2'-1'"))
+    widget.start_setup_move(now=1.0)
+    widget.macro_selection.add(widget.board, first)
+    widget.macro_selection.add(widget.board, second)
+    widget.play_macro(4, now=2.0)
+
+    widget._handle_escape(now=3.0)
+
+    assert not widget.macro_selection
+    assert widget.setup_move is not None
+    assert widget.setup_move.recording
+    assert widget.playback_active
+
+    _finish_turns(widget)
+
+    assert widget.setup_move.commands == (
+        TurnCommand(first, TurnDirection.CLOCKWISE),
+        TurnCommand(second, TurnDirection.COUNTERCLOCKWISE),
+        TurnCommand(first, TurnDirection.COUNTERCLOCKWISE),
+    )
+
+
 def test_pressing_f1_again_restarts_setup_recording_from_current_position(widget) -> None:
     first = TurnCommand(HexCoordinate(0, 0), TurnDirection.CLOCKWISE)
     second = TurnCommand(HexCoordinate(1, 0), TurnDirection.COUNTERCLOCKWISE)
