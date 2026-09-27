@@ -185,6 +185,32 @@ def test_reset_restores_solved_state() -> None:
     assert board.is_solved()
 
 
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    (
+        (BoardMode.TORUS, (21, 14)),
+        (BoardMode.KLEIN_BOTTLE, (27, 18)),
+    ),
+)
+def test_solved_piece_counts_include_each_physical_piece_once(mode, expected) -> None:
+    board = PeriodicBoard(mode)
+
+    assert board.piece_totals() == expected
+    assert board.solved_piece_counts() == expected
+
+
+def test_piece_counts_require_every_sticker_to_have_correct_position_and_orientation() -> None:
+    board = PeriodicBoard()
+    edge_total, corner_total = board.piece_totals()
+    face = board.faces[0]
+    wrong_color = board.faces[1].color
+
+    face.edge_colors = (wrong_color,) + face.edge_colors[1:]
+    face.corner_colors = (wrong_color,) + face.corner_colors[1:]
+
+    assert board.solved_piece_counts() == (edge_total - 1, corner_total - 1)
+
+
 def test_sticker_state_can_be_restored() -> None:
     board = PeriodicBoard()
     original = board.sticker_state()

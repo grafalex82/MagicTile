@@ -9,7 +9,7 @@ from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QAction,
     QActionGroup,
@@ -88,6 +88,8 @@ class _QueuedTurn:
 
 class GameBoardWidget(QWidget):
     """Interactive Qt widget containing the board and all game UI state."""
+
+    status_changed = pyqtSignal()
 
     def __init__(
         self,
@@ -191,6 +193,7 @@ class GameBoardWidget(QWidget):
                     current,
                     self.settings.turn_animation_duration_seconds,
                 )
+                self.status_changed.emit()
                 if queued.record_history and queued.count_player_move:
                     self._count_player_move(check_for_win=False)
             elif self.playback_active:
@@ -348,6 +351,7 @@ class GameBoardWidget(QWidget):
         self.board.reset()
         self.game_active = False
         self.move_count = 0
+        self.status_changed.emit()
         self.update()
 
     def set_mode(self, mode: BoardMode) -> None:
@@ -362,6 +366,7 @@ class GameBoardWidget(QWidget):
         self.move_count = 0
         self._static_cache = None
         self._static_cache_state = None
+        self.status_changed.emit()
         self.update()
 
     def capture_game_state(self) -> GameState:
@@ -392,6 +397,7 @@ class GameBoardWidget(QWidget):
                 self.turn_history.record(command)
         elif self.setup_move is not None:
             self.setup_history_floor = self.turn_history.snapshot().position
+        self.status_changed.emit()
         self.update()
 
     def scrumble(self, turn_count: int = 3) -> None:
@@ -407,6 +413,7 @@ class GameBoardWidget(QWidget):
         self.game_active = True
         self.move_count = 0
         self._force_static_refresh = True
+        self.status_changed.emit()
         self.update()
 
     def record_macro(self, slot: int, *, now: float | None = None) -> None:
@@ -613,6 +620,7 @@ class GameBoardWidget(QWidget):
             now,
             self.settings.turn_animation_duration_seconds,
         )
+        self.status_changed.emit()
 
     def _synchronize_recording(self) -> None:
         if self.macro_recording is None:
@@ -654,6 +662,7 @@ class GameBoardWidget(QWidget):
         if not self.game_active:
             return
         self.move_count += 1
+        self.status_changed.emit()
         if check_for_win:
             self._check_for_win(time.monotonic())
 
@@ -661,12 +670,14 @@ class GameBoardWidget(QWidget):
         """Remove one scored turn while undoing a move in an active game."""
         if self.game_active:
             self.move_count = max(0, self.move_count - 1)
+            self.status_changed.emit()
 
     def _check_for_win(self, now: float) -> None:
         """Finish the active game when the board reaches its solved state."""
         if not self.game_active or not self.board.is_solved():
             return
         self.game_active = False
+        self.status_changed.emit()
         move_word = "move" if self.move_count == 1 else "moves"
         self._show_status(
             f"Congratulations! Puzzle solved in {self.move_count} {move_word}.",
@@ -797,9 +808,32 @@ class GameWindow(QMainWindow):
         self.board_widget = GameBoardWidget(settings, self)
         self.current_save_path: Path | None = None
         self.setCentralWidget(self.board_widget)
+        self.board_widget.status_changed.connect(self._refresh_status_bar)
         self._create_actions()
         self._create_main_menu()
+        self.statusBar().setObjectName("game_status_bar")
+        self._refresh_status_bar()
         self.resize(*WINDOW_SIZE)
+
+    def _refresh_status_bar(self) -> None:
+        """Show the current topology, score, and solved-piece progress."""
+        board = self.board_widget.board
+        mode_name = {
+            BoardMode.TORUS: "Torus",
+            BoardMode.KLEIN_BOTTLE: "Klein bottle",
+        }[board.mode]
+        solved_edges, solved_corners = board.solved_piece_counts()
+        total_edges, total_corners = board.piece_totals()
+        fields = [f"Mode: {mode_name}"]
+        if self.board_widget.game_active:
+            fields.append(f"Moves: {self.board_widget.move_count}")
+        fields.extend(
+            (
+                f"Edges: {solved_edges}/{total_edges}",
+                f"Corners: {solved_corners}/{total_corners}",
+            )
+        )
+        self.statusBar().showMessage("   |   ".join(fields))
 
     def _create_actions(self) -> None:
         """Create reusable application commands for the menu and shortcuts."""

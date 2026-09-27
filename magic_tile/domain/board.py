@@ -366,6 +366,81 @@ class PeriodicBoard:
             for face in self._faces
         )
 
+    def solved_piece_counts(self) -> tuple[int, int]:
+        """Return correctly positioned and oriented edge and corner counts.
+
+        One physical edge is represented by two sticker slots and one corner
+        by three.  A piece is solved only when every one of its stickers is on
+        the face whose centre has the same colour.  Canonical slot conversion
+        keeps this test orientation-aware in Klein-bottle mode as well.
+        """
+        edge_pieces, corner_pieces = self._piece_slots()
+        solved_edges = sum(
+            all(face.edge_colors[index] is face.color for face, index in piece)
+            for piece in edge_pieces
+        )
+        solved_corners = sum(
+            all(face.corner_colors[index] is face.color for face, index in piece)
+            for piece in corner_pieces
+        )
+        return solved_edges, solved_corners
+
+    def piece_totals(self) -> tuple[int, int]:
+        """Return the total number of physical edge and corner pieces."""
+        edge_pieces, corner_pieces = self._piece_slots()
+        return len(edge_pieces), len(corner_pieces)
+
+    def _piece_slots(
+        self,
+    ) -> tuple[
+        frozenset[frozenset[tuple[Face, int]]],
+        frozenset[frozenset[tuple[Face, int]]],
+    ]:
+        """Group canonical sticker slots into unique physical pieces."""
+        edges: set[frozenset[tuple[Face, int]]] = set()
+        corners: set[frozenset[tuple[Face, int]]] = set()
+
+        for face, representative in zip(
+            self._faces, self.representative_coordinates, strict=True
+        ):
+            for index, direction in enumerate(self.NEIGHBOUR_DIRECTIONS):
+                first_neighbor = self.occurrence_at(
+                    representative.translated(*direction)
+                )
+                edges.add(
+                    frozenset(
+                        (
+                            (face, index),
+                            (
+                                first_neighbor.face,
+                                first_neighbor.canonical_edge_index(index + 3),
+                            ),
+                        )
+                    )
+                )
+
+                next_direction = self.NEIGHBOUR_DIRECTIONS[(index + 1) % 6]
+                second_neighbor = self.occurrence_at(
+                    representative.translated(*next_direction)
+                )
+                corners.add(
+                    frozenset(
+                        (
+                            (face, index),
+                            (
+                                first_neighbor.face,
+                                first_neighbor.canonical_corner_index(index + 2),
+                            ),
+                            (
+                                second_neighbor.face,
+                                second_neighbor.canonical_corner_index(index + 4),
+                            ),
+                        )
+                    )
+                )
+
+        return frozenset(edges), frozenset(corners)
+
     def affected_slots(self, coordinate: HexCoordinate) -> frozenset[Slot]:
         """Return face-reference-addressed slots moved by the turn group."""
         if not isinstance(coordinate, HexCoordinate):

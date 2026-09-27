@@ -257,6 +257,9 @@ def test_main_menu_has_requested_structure_and_game_file_commands(application) -
     assert window.start_setup_move_action.shortcut() == QKeySequence("F1")
     assert window.end_setup_move_action.shortcut() == QKeySequence("F2")
     assert window.unwind_setup_move_action.shortcut() == QKeySequence("F3")
+    assert window.statusBar().currentMessage() == (
+        "Mode: Torus   |   Edges: 21/21   |   Corners: 14/14"
+    )
 
     window.close()
 
@@ -357,7 +360,37 @@ def test_scrumble_menu_actions_apply_their_move_counts(application, monkeypatch)
         assert len(turns) == expected_count
         assert window.board_widget.game_active
         assert window.board_widget.move_count == 0
+        assert "Moves: 0" in window.statusBar().currentMessage()
 
+    window.close()
+
+
+def test_status_bar_tracks_mode_moves_and_solved_pieces(application, monkeypatch) -> None:
+    window = GameWindow(Settings(turn_animation_duration_seconds=0.001))
+    window.board_widget._frame_timer.stop()
+    coordinate = HexCoordinate(0, 0)
+    monkeypatch.setattr(
+        "magic_tile.ui.game_window.random.choice",
+        lambda values: coordinate if values is window.board_widget.board.representative_coordinates else values[0],
+    )
+
+    window.board_widget.scrumble(1)
+    scrambled_status = window.statusBar().currentMessage()
+    assert scrambled_status.startswith("Mode: Torus   |   Moves: 0")
+    assert "Edges: " in scrambled_status
+    assert "Corners: " in scrambled_status
+
+    window.board_widget._perform_new_turn(
+        TurnCommand(coordinate, TurnDirection.COUNTERCLOCKWISE)
+    )
+    assert "Moves: 1" not in window.statusBar().currentMessage()
+    assert "Edges: 21/21" in window.statusBar().currentMessage()
+    assert "Corners: 14/14" in window.statusBar().currentMessage()
+
+    window.mode_actions[BoardMode.KLEIN_BOTTLE].trigger()
+    assert window.statusBar().currentMessage() == (
+        "Mode: Klein bottle   |   Edges: 27/27   |   Corners: 18/18"
+    )
     window.close()
 
 
