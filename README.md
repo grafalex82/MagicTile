@@ -207,7 +207,8 @@ Use **F1** to start recording a Setup Move and **F2** to stop recording it.
 Ending an empty recording discards it immediately.
 Pressing F1 again during recording discards the recorded sequence and starts
 again from the current board position. Escape cancels and clears a live Setup
-Move recording without reverting turns already made.
+Move recording without reverting turns already made. Macros can be played
+while recording; every turn they execute becomes part of the Setup Move.
 Run the desired formula or macro, then press **F3** to animate the recorded
 setup turns in reverse order and direction. The sequence is cleared as soon as
 the unwind starts, so F3 cannot apply it twice and F1 can begin a new Setup

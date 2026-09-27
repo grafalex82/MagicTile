@@ -803,9 +803,6 @@ class GameBoardWidget(QWidget):
         # A recording cannot recursively launch another macro.
         if self.macro_recording is not None:
             return
-        if self.setup_move is not None and self.setup_move.recording:
-            self._show_status("End Setup Move recording first", True, now)
-            return
 
         # Empty macro slots have no action associated with their digit.
         macro = self.settings.macros[slot]
