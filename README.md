@@ -16,10 +16,6 @@ Key features:
 - Setup Moves that can be recorded and unwound after running a formula.
 - Portable game saves and human-readable configuration.
 
-| Torus mode — solved | Torus mode — scrambled |
-| --- | --- |
-| ![Solved MagicTile board](assets/screenshots/solved-board.png) | ![Scrambled MagicTile board](assets/screenshots/scrambled-board.png) |
-
 ## Board modes
 
 The board looks infinite, but it is built by repeating a small set of logical
@@ -39,6 +35,10 @@ Torus mode is the original, simpler board. Imagine joining the left edge of the
 pattern to the right edge and the top edge to the bottom edge. Moving far enough
 in any direction brings you back to the same face with exactly the same
 surroundings and orientation.
+
+| Torus mode — solved | Torus mode — scrambled |
+| --- | --- |
+| ![Solved MagicTile board](assets/screenshots/solved-board.png) | ![Scrambled MagicTile board](assets/screenshots/scrambled-board.png) |
 
 ### Klein bottle mode
 
