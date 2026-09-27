@@ -77,6 +77,10 @@ solution must match both the colors and the corner orientation.
 | --- | --- |
 | ![Solved Klein bottle mode board](assets/screenshots/klein-bottle-solved.png) | ![Scrambled Klein bottle mode board](assets/screenshots/klein-bottle-scrambled.png) |
 
+The two highlighted 3-by-3 regions in the solved-board screenshot represent
+the same block; the right-hand copy is reflected vertically relative to the
+left-hand copy.
+
 Select **Puzzle → Mode → Torus mode** or
 **Puzzle → Mode → Klein bottle mode** to switch modes.
 Changing modes resets the board. If a scored game is active, MagicTile asks for
