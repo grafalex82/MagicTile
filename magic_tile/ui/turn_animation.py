@@ -10,7 +10,11 @@ from magic_tile.domain import Face, FaceColor, HexCoordinate, PeriodicBoard, Tur
 
 @dataclass(slots=True)
 class TurnAnimation:
-    """Colors and timing needed to display one atomic model permutation."""
+    """Colors and timing needed to display one atomic model permutation.
+
+    ``direction`` is canonical. The renderer reverses its visual angle for
+    reflected Klein-bottle occurrences.
+    """
 
     face: Face
     turning_faces: tuple[Face, ...]
@@ -37,11 +41,12 @@ class TurnAnimation:
             slot_face, kind, index = slot
             values = slot_face.edge_colors if kind == "edge" else slot_face.corner_colors
             source_colors[slot] = values[index]
+        canonical_direction = board.turn_direction_at(face_coordinate, direction)
         board.turn(face_coordinate, direction)
         return cls(
             face,
             turning_faces,
-            direction,
+            canonical_direction,
             started_at,
             source_colors,
             duration_seconds,

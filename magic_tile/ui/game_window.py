@@ -12,6 +12,7 @@ from pathlib import Path
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import (
     QAction,
+    QActionGroup,
     QEnterEvent,
     QKeyEvent,
     QKeySequence,
@@ -20,9 +21,9 @@ from PyQt6.QtGui import (
     QPaintEvent,
     QWheelEvent,
 )
-from PyQt6.QtWidgets import QApplication, QFileDialog, QMainWindow, QWidget
+from PyQt6.QtWidgets import QApplication, QFileDialog, QMainWindow, QMessageBox, QWidget
 
-from magic_tile.domain import HexCoordinate, PeriodicBoard, TurnDirection
+from magic_tile.domain import BoardMode, HexCoordinate, PeriodicBoard, TurnDirection
 from magic_tile.input import (
     MacroRecording,
     MacroSelection,
@@ -349,6 +350,20 @@ class GameBoardWidget(QWidget):
         self.move_count = 0
         self.update()
 
+    def set_mode(self, mode: BoardMode) -> None:
+        """Reset the session onto a freshly solved board in *mode*."""
+        if not isinstance(mode, BoardMode):
+            raise TypeError("mode must be a BoardMode")
+        if self.board.mode is mode:
+            return
+        self._prepare_for_new_board_state()
+        self.board = PeriodicBoard(mode)
+        self.game_active = False
+        self.move_count = 0
+        self._static_cache = None
+        self._static_cache_state = None
+        self.update()
+
     def capture_game_state(self) -> GameState:
         """Return the complete persistent state of the current game."""
         return GameState.capture(
@@ -363,6 +378,10 @@ class GameBoardWidget(QWidget):
         if not isinstance(state, GameState):
             raise TypeError("state must be a GameState")
         self._prepare_for_new_board_state()
+        if self.board.mode is not state.mode:
+            self.board = PeriodicBoard(state.mode)
+            self._static_cache = None
+            self._static_cache_state = None
         state.restore_board(self.board)
         self.game_active = state.game_active
         self.move_count = state.move_count
@@ -381,7 +400,7 @@ class GameBoardWidget(QWidget):
             raise ValueError("turn_count must be a positive integer")
         self._prepare_for_new_board_state()
         self.board.reset()
-        coordinates = tuple(HexCoordinate(index, 0) for index in range(len(self.board.faces)))
+        coordinates = self.board.representative_coordinates
         directions = tuple(TurnDirection)
         for _ in range(turn_count):
             self.board.turn(random.choice(coordinates), random.choice(directions))
@@ -839,6 +858,17 @@ class GameWindow(QMainWindow):
             "Unwind Setup Move", "F3", self.board_widget.unwind_setup_move
         )
 
+        self.mode_action_group = QActionGroup(self)
+        self.mode_action_group.setExclusive(True)
+        self.mode_actions = {
+            mode: self._mode_action(text, mode)
+            for mode, text in (
+                (BoardMode.TORUS, "Torus mode"),
+                (BoardMode.KLEIN_BOTTLE, "Klein bottle mode"),
+            )
+        }
+        self._synchronize_mode_actions()
+
     def open_game(self) -> None:
         """Choose a save file and replace the current game with its contents."""
         filename, _ = QFileDialog.getOpenFileName(self, "Open MagicTile Game", "", GAME_SAVE_FILTER)
@@ -855,6 +885,7 @@ class GameWindow(QMainWindow):
             return
 
         self.current_save_path = path
+        self._synchronize_mode_actions()
         self.board_widget._show_status("Game loaded", False, time.monotonic())
         self.board_widget.update()
 
@@ -896,6 +927,43 @@ class GameWindow(QMainWindow):
         action.setShortcut(QKeySequence(shortcut))
         action.triggered.connect(callback)
         return action
+
+    def _mode_action(self, text: str, mode: BoardMode) -> QAction:
+        """Create one exclusive topology selector."""
+        action = QAction(text, self)
+        action.setObjectName(f"{mode.value}_mode_action")
+        action.setCheckable(True)
+        action.triggered.connect(
+            lambda checked=False, selected_mode=mode: self.change_mode(selected_mode)
+        )
+        self.mode_action_group.addAction(action)
+        return action
+
+    def _synchronize_mode_actions(self) -> None:
+        """Make the checked menu item match the board, including after cancel."""
+        current_mode = self.board_widget.board.mode
+        for mode, action in self.mode_actions.items():
+            action.setChecked(mode is current_mode)
+
+    def change_mode(self, mode: BoardMode) -> None:
+        """Confirm loss of an active score, then switch topology."""
+        if mode is self.board_widget.board.mode:
+            self._synchronize_mode_actions()
+            return
+        if self.board_widget.game_active:
+            answer = QMessageBox.question(
+                self,
+                "Reset current game?",
+                "Switching modes will reset the current scored game. Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                self._synchronize_mode_actions()
+                return
+        self.board_widget.set_mode(mode)
+        self.current_save_path = None
+        self._synchronize_mode_actions()
 
     def _macro_action(self, operation: str, slot: int, *, reverse: bool = False) -> QAction:
         """Create one macro-slot action and bind its existing keyboard shortcut."""
@@ -945,6 +1013,11 @@ class GameWindow(QMainWindow):
         self.scrumble_action = self.scrumble_menu.menuAction()
         self.puzzle_menu.addSeparator()
         self.puzzle_menu.addActions((self.undo_action, self.redo_action))
+
+        self.mode_menu = menu_bar.addMenu("Mode")
+        self.mode_menu.addActions(
+            (self.mode_actions[BoardMode.TORUS], self.mode_actions[BoardMode.KLEIN_BOTTLE])
+        )
 
         self.macro_menu = menu_bar.addMenu("Macro")
         self.record_menu = self.macro_menu.addMenu("Record")

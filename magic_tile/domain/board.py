@@ -7,7 +7,7 @@ from enum import Enum, IntEnum
 
 
 class FaceColor(Enum):
-    """The seven saturated colours used by the reference configuration."""
+    """The saturated colours used by the available board configurations."""
 
     WHITE = (255, 255, 255)
     CYAN = (0, 225, 232)
@@ -16,6 +16,8 @@ class FaceColor(Enum):
     BLUE = (17, 17, 232)
     DARK_GREEN = (0, 143, 0)
     YELLOW = (255, 255, 0)
+    PURPLE = (128, 0, 128)
+    LIGHT_GRAY = (192, 192, 192)
 
     @property
     def rgb(self) -> tuple[int, int, int]:
@@ -28,6 +30,13 @@ class TurnDirection(IntEnum):
 
     CLOCKWISE = -1
     COUNTERCLOCKWISE = 1
+
+
+class BoardMode(Enum):
+    """Topology used to repeat the finite set of logical faces."""
+
+    TORUS = "torus"
+    KLEIN_BOTTLE = "klein_bottle"
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,13 +126,33 @@ class Face:
 Slot = tuple[Face, str, int]
 
 
-class PeriodicBoard:
-    """Infinite plane backed by a fixed torus of logical face objects.
+@dataclass(frozen=True, slots=True)
+class FaceOccurrence:
+    """One screen-plane occurrence of a logical face.
 
-    The current reference configuration has seven faces. ``face_at`` retains
-    the existing seven-cell mapping, while every other model operation works
-    with face references and pre-built neighbor references. Following any one
-    neighbor direction seven times therefore returns to the same face object.
+    Klein-bottle copies in every other horizontal block are reflected across
+    the screen's X axis. Sticker slots remain stored in the canonical,
+    unreflected orientation and are translated here for rendering and moves.
+    """
+
+    face: Face
+    mirrored: bool = False
+
+    def canonical_edge_index(self, screen_index: int) -> int:
+        """Map an edge direction on screen to the face's stored slot."""
+        return (1 - screen_index) % 6 if self.mirrored else screen_index % 6
+
+    def canonical_corner_index(self, screen_index: int) -> int:
+        """Map a corner between screen directions to the stored slot."""
+        return (-screen_index) % 6 if self.mirrored else screen_index % 6
+
+
+class PeriodicBoard:
+    """Infinite plane backed by a finite set of logical face objects.
+
+    Torus mode uses the original seven-face quotient. Klein-bottle mode uses a
+    3-by-3 quotient whose alternating horizontal blocks are reflected. Every
+    movable sticker is stored in the logical face's canonical orientation.
     """
 
     NEIGHBOUR_DIRECTIONS = (
@@ -135,14 +164,41 @@ class PeriodicBoard:
         (0, 1),
     )
 
-    def __init__(self) -> None:
-        """Build and permanently connect the solved seven-face torus."""
-        palette = tuple(FaceColor)
+    TORUS_COLORS = (
+        FaceColor.WHITE,
+        FaceColor.CYAN,
+        FaceColor.RED,
+        FaceColor.ORANGE,
+        FaceColor.BLUE,
+        FaceColor.DARK_GREEN,
+        FaceColor.YELLOW,
+    )
+    KLEIN_BOTTLE_COLORS = (
+        FaceColor.DARK_GREEN,
+        FaceColor.YELLOW,
+        FaceColor.WHITE,
+        FaceColor.PURPLE,
+        FaceColor.RED,
+        FaceColor.ORANGE,
+        FaceColor.CYAN,
+        FaceColor.LIGHT_GRAY,
+        FaceColor.BLUE,
+    )
+
+    def __init__(self, mode: BoardMode = BoardMode.TORUS) -> None:
+        """Build and permanently connect the selected solved quotient."""
+        if not isinstance(mode, BoardMode):
+            raise TypeError("mode must be a BoardMode")
+        self.mode = mode
+        palette = self.TORUS_COLORS if mode is BoardMode.TORUS else self.KLEIN_BOTTLE_COLORS
         self._faces = tuple(Face(color) for color in palette)
+        self._representatives = {
+            face: self._representative_for_index(index) for index, face in enumerate(self._faces)
+        }
 
         # Calculate adjacency here, once. Turns never derive it from colour.
-        for index, face in enumerate(self._faces):
-            representative = HexCoordinate(index, 0)
+        for face in self._faces:
+            representative = self._representatives[face]
             face._connect_neighbors(
                 tuple(
                     self.face_at(representative.translated(dq, dr)) for dq, dr in self.NEIGHBOUR_DIRECTIONS
@@ -154,15 +210,65 @@ class PeriodicBoard:
         """Return the logical face objects in configuration order."""
         return self._faces
 
+    @property
+    def representative_coordinates(self) -> tuple[HexCoordinate, ...]:
+        """Return one canonical, unmirrored coordinate for every face."""
+        return tuple(self._representatives[face] for face in self._faces)
+
+    def _representative_for_index(self, index: int) -> HexCoordinate:
+        if self.mode is BoardMode.TORUS:
+            return HexCoordinate(index, 0)
+        return HexCoordinate(index % 3, index // 3)
+
+    def occurrence_at(self, coordinate: HexCoordinate) -> FaceOccurrence:
+        """Resolve one infinite-plane cell to a face and its orientation.
+
+        The returned :class:`FaceOccurrence` deliberately contains two pieces
+        of information. ``face`` identifies the shared mutable logical face;
+        ``mirrored`` tells the renderer and turn code whether this particular
+        copy is reflected across the screen's X axis. Thus ordinary and
+        reflected cells can share all sticker state without losing their
+        different visible orientations.
+
+        Torus mode uses the original seven-face quotient. Its face index is
+        ``(q + 3*r) mod 7`` and no occurrence is mirrored.
+
+        In Klein-bottle mode, ``q`` is divided into horizontal blocks three
+        columns wide. Python's :func:`divmod` yields both the signed block
+        number and a stable local column in ``0..2``, including for negative
+        coordinates. Even-numbered blocks are canonical; their logical row is
+        simply ``r mod 3``. Odd-numbered blocks are X-axis reflections. On the
+        flat-top axial grid, reflecting screen Y also depends on the local
+        column because screen Y is proportional to ``r + q/2``. The reflected
+        logical row is therefore ``(-r - local_q - 1) mod 3``. Finally,
+        ``logical_r * 3 + local_q`` selects one of the nine row-major faces.
+
+        Advancing six columns reaches another canonical block, advancing three
+        rows repeats vertically, and advancing three columns reaches the same
+        quotient through its orientation-reversing Klein-bottle transition.
+        """
+        if not isinstance(coordinate, HexCoordinate):
+            raise TypeError("coordinate must be a HexCoordinate")
+        if self.mode is BoardMode.TORUS:
+            index = (coordinate.q + 3 * coordinate.r) % len(self._faces)
+            return FaceOccurrence(self._faces[index])
+
+        block, local_q = divmod(coordinate.q, 3)
+        mirrored = bool(block % 2)
+        if mirrored:
+            logical_r = (-coordinate.r - local_q - 1) % 3
+        else:
+            logical_r = coordinate.r % 3
+        return FaceOccurrence(self._faces[logical_r * 3 + local_q], mirrored)
+
     def face_at(self, coordinate: HexCoordinate) -> Face:
         """Return the logical face repeated at an axial coordinate.
 
-        Different coordinates may return the same object. The modulo formula
-        is deliberately isolated here so it can later be replaced by a
-        configuration-driven lookup without affecting adjacency or turn logic.
+        Different coordinates may return the same object. In torus mode the
+        original modulo formula maps ``(q, r)`` to ``(q + 3 * r) mod 7``.
+        Klein-bottle coordinates are resolved by :meth:`occurrence_at`.
 
-        The current seven-face layout numbers the face objects from 0 to 6 and
-        maps ``(q, r)`` to ``(q + 3 * r) mod 7``. For the six neighbor offsets
+        The seven-face layout numbers the face objects from 0 to 6. For the six neighbor offsets
         in ``NEIGHBOUR_DIRECTIONS``, ``dq + 3 * dr`` gives, in order,
         ``1, -2, -3, -1, 2, 3``. Modulo 7 these are exactly the six non-zero
         residues, so a cell and its six neighbors resolve to all seven face
@@ -173,8 +279,19 @@ class PeriodicBoard:
         vectors. A step in any fixed neighbor direction adds a non-zero residue
         modulo 7, so seven such steps return to the starting face object.
         """
-        index = (coordinate.q + 3 * coordinate.r) % len(self._faces)
-        return self._faces[index]
+        return self.occurrence_at(coordinate).face
+
+    def turn_direction_at(
+        self,
+        coordinate: HexCoordinate,
+        direction: TurnDirection,
+    ) -> TurnDirection:
+        """Return the canonical direction represented by a visible turn."""
+        if not isinstance(direction, TurnDirection):
+            raise TypeError("direction must be a TurnDirection")
+        if self.occurrence_at(coordinate).mirrored:
+            return TurnDirection(-int(direction))
+        return direction
 
     def turning_faces_at(self, coordinate: HexCoordinate) -> tuple[Face, ...]:
         """Return independently identified faces that turn together.
@@ -192,30 +309,42 @@ class PeriodicBoard:
         if not isinstance(direction, TurnDirection):
             raise TypeError("direction must be a TurnDirection")
 
-        step = int(direction)
+        step = int(self.turn_direction_at(coordinate, direction))
         old_edges = {face: face.edge_colors for face in self._faces}
         old_corners = {face: face.corner_colors for face in self._faces}
         new_edges = {face: list(face.edge_colors) for face in self._faces}
         new_corners = {face: list(face.corner_colors) for face in self._faces}
 
         for focus in self.turning_faces_at(coordinate):
+            representative = self._representatives[focus]
             for source_index in range(6):
                 destination_index = (source_index + step) % 6
 
                 new_edges[focus][destination_index] = old_edges[focus][source_index]
                 new_corners[focus][destination_index] = old_corners[focus][source_index]
 
-                source_neighbor = focus.neighbors[source_index]
-                destination_neighbor = focus.neighbors[destination_index]
-                source_edge = (source_index + 3) % 6
-                destination_edge = (destination_index + 3) % 6
+                source_occurrence = self.occurrence_at(
+                    representative.translated(*self.NEIGHBOUR_DIRECTIONS[source_index])
+                )
+                destination_occurrence = self.occurrence_at(
+                    representative.translated(*self.NEIGHBOUR_DIRECTIONS[destination_index])
+                )
+                source_neighbor = source_occurrence.face
+                destination_neighbor = destination_occurrence.face
+                source_edge = source_occurrence.canonical_edge_index((source_index + 3) % 6)
+                destination_edge = destination_occurrence.canonical_edge_index(
+                    (destination_index + 3) % 6
+                )
                 new_edges[destination_neighbor][destination_edge] = old_edges[source_neighbor][source_edge]
 
-                for source_corner in (
+                for source_screen_corner in (
                     (source_index + 2) % 6,
                     (source_index + 3) % 6,
                 ):
-                    destination_corner = (source_corner + step) % 6
+                    source_corner = source_occurrence.canonical_corner_index(source_screen_corner)
+                    destination_corner = destination_occurrence.canonical_corner_index(
+                        (source_screen_corner + step) % 6
+                    )
                     new_corners[destination_neighbor][destination_corner] = old_corners[source_neighbor][
                         source_corner
                     ]
@@ -244,12 +373,15 @@ class PeriodicBoard:
 
         slots: set[Slot] = set()
         for focus in self.turning_faces_at(coordinate):
-            for index, neighbor in enumerate(focus.neighbors):
+            representative = self._representatives[focus]
+            for index, direction in enumerate(self.NEIGHBOUR_DIRECTIONS):
+                occurrence = self.occurrence_at(representative.translated(*direction))
+                neighbor = occurrence.face
                 slots.add((focus, "edge", index))
                 slots.add((focus, "corner", index))
-                slots.add((neighbor, "edge", (index + 3) % 6))
-                slots.add((neighbor, "corner", (index + 2) % 6))
-                slots.add((neighbor, "corner", (index + 3) % 6))
+                slots.add((neighbor, "edge", occurrence.canonical_edge_index((index + 3) % 6)))
+                slots.add((neighbor, "corner", occurrence.canonical_corner_index((index + 2) % 6)))
+                slots.add((neighbor, "corner", occurrence.canonical_corner_index((index + 3) % 6)))
         return frozenset(slots)
 
     def sticker_state(self) -> tuple[tuple[FaceColor, ...], ...]:
@@ -264,6 +396,9 @@ class PeriodicBoard:
             raise ValueError("each saved face must contain exactly 12 sticker colors")
         if any(not isinstance(color, FaceColor) for face_state in state for color in face_state):
             raise TypeError("every saved sticker must be a FaceColor")
+        allowed_colors = {face.color for face in self._faces}
+        if any(color not in allowed_colors for face_state in state for color in face_state):
+            raise ValueError("board state contains a color unavailable in this mode")
 
         for face, face_state in zip(self._faces, state, strict=True):
             face.edge_colors = face_state[:6]

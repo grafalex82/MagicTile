@@ -1,6 +1,6 @@
 import pytest
 
-from magic_tile.domain import FaceColor, HexCoordinate, PeriodicBoard, TurnDirection
+from magic_tile.domain import BoardMode, FaceColor, HexCoordinate, PeriodicBoard, TurnDirection
 from magic_tile.ui.turn_animation import TurnAnimation
 
 
@@ -89,3 +89,18 @@ def test_animation_reaches_sixty_degrees_in_screen_coordinates(
     )
 
     assert animation.angle_degrees(2.0 + duration_seconds) == pytest.approx(expected_angle)
+
+
+def test_animation_stores_the_inverted_canonical_direction_for_a_mirrored_copy() -> None:
+    board = PeriodicBoard(BoardMode.KLEIN_BOTTLE)
+
+    animation = TurnAnimation.begin(
+        board,
+        HexCoordinate(3, 2),
+        TurnDirection.CLOCKWISE,
+        started_at=2.0,
+        duration_seconds=0.5,
+    )
+
+    assert animation.direction is TurnDirection.COUNTERCLOCKWISE
+    assert animation.angle_degrees(2.5) == pytest.approx(-60.0)

@@ -2,8 +2,10 @@
 
 from magic_tile.domain.board import (
     BOARD,
+    BoardMode,
     Face,
     FaceColor,
+    FaceOccurrence,
     HexCoordinate,
     PeriodicBoard,
     TurnDirection,
@@ -11,8 +13,10 @@ from magic_tile.domain.board import (
 
 __all__ = (
     "BOARD",
+    "BoardMode",
     "Face",
     "FaceColor",
+    "FaceOccurrence",
     "HexCoordinate",
     "PeriodicBoard",
     "TurnDirection",

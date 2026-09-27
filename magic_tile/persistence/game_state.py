@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from magic_tile.domain import FaceColor, HexCoordinate, PeriodicBoard, TurnDirection
+from magic_tile.domain import BoardMode, FaceColor, HexCoordinate, PeriodicBoard, TurnDirection
 from magic_tile.input import SetupMove, TurnCommand
 
 GAME_STATE_FORMAT = "magic-tile-game"
@@ -21,6 +21,7 @@ class GameState:
     game_active: bool
     move_count: int
     setup_move: SetupMove | None = None
+    mode: BoardMode = BoardMode.TORUS
 
     def __post_init__(self) -> None:
         if not isinstance(self.game_active, bool):
@@ -31,10 +32,12 @@ class GameState:
             raise ValueError("move_count cannot be negative")
         if self.setup_move is not None and not isinstance(self.setup_move, SetupMove):
             raise TypeError("setup_move must be a SetupMove or None")
+        if not isinstance(self.mode, BoardMode):
+            raise TypeError("mode must be a BoardMode")
 
         # Reuse the board model's structural validation without retaining or
         # modifying a temporary board after construction.
-        PeriodicBoard().restore_sticker_state(self.stickers)
+        PeriodicBoard(self.mode).restore_sticker_state(self.stickers)
 
     @classmethod
     def capture(
@@ -48,12 +51,14 @@ class GameState:
         """Capture the settled model and score from the current session."""
         if not isinstance(board, PeriodicBoard):
             raise TypeError("board must be a PeriodicBoard")
-        return cls(board.sticker_state(), game_active, move_count, setup_move)
+        return cls(board.sticker_state(), game_active, move_count, setup_move, board.mode)
 
     def restore_board(self, board: PeriodicBoard) -> None:
         """Apply this saved sticker arrangement to *board*."""
         if not isinstance(board, PeriodicBoard):
             raise TypeError("board must be a PeriodicBoard")
+        if board.mode is not self.mode:
+            raise ValueError("saved game mode does not match the target board")
         board.restore_sticker_state(self.stickers)
 
 
@@ -80,23 +85,34 @@ def load_game_state(path: Path | str) -> GameState:
     if isinstance(move_count, bool) or not isinstance(move_count, int) or move_count < 0:
         raise ValueError("'move_count' must be a non-negative integer.")
 
-    raw_faces = data.get("faces")
-    if not isinstance(raw_faces, list) or len(raw_faces) != len(FaceColor):
-        raise ValueError(f"'faces' must contain exactly {len(FaceColor)} face objects.")
+    raw_mode = data.get("mode", BoardMode.TORUS.value)
+    try:
+        mode = BoardMode(raw_mode)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"Unknown game mode: {raw_mode!r}.") from error
 
-    board = PeriodicBoard()
+    raw_faces = data.get("faces")
+    board = PeriodicBoard(mode)
+    if not isinstance(raw_faces, list) or len(raw_faces) != len(board.faces):
+        raise ValueError(f"'faces' must contain exactly {len(board.faces)} face objects.")
+
+    allowed_colors = {face.color for face in board.faces}
     stickers: list[tuple[FaceColor, ...]] = []
     for index, (raw_face, face) in enumerate(zip(raw_faces, board.faces, strict=True)):
         if not isinstance(raw_face, dict):
             raise ValueError(f"Face {index} must be an object.")
         if raw_face.get("center_color") != face.color.name:
             raise ValueError(f"Face {index} has an unexpected center color.")
-        edges = _parse_colors(raw_face.get("edge_colors"), f"face {index} edge_colors")
-        corners = _parse_colors(raw_face.get("corner_colors"), f"face {index} corner_colors")
+        edges = _parse_colors(
+            raw_face.get("edge_colors"), f"face {index} edge_colors", allowed_colors
+        )
+        corners = _parse_colors(
+            raw_face.get("corner_colors"), f"face {index} corner_colors", allowed_colors
+        )
         stickers.append(edges + corners)
 
     setup_move = _parse_setup_move(data.get("setup_move"))
-    return GameState(tuple(stickers), game_active, move_count, setup_move)
+    return GameState(tuple(stickers), game_active, move_count, setup_move, mode)
 
 
 def save_game_state(state: GameState, path: Path | str) -> None:
@@ -108,6 +124,7 @@ def save_game_state(state: GameState, path: Path | str) -> None:
     data = {
         "format": GAME_STATE_FORMAT,
         "version": GAME_STATE_VERSION,
+        "mode": state.mode.value,
         "game_active": state.game_active,
         "move_count": state.move_count,
         "setup_move": _serialize_setup_move(state.setup_move),
@@ -117,7 +134,7 @@ def save_game_state(state: GameState, path: Path | str) -> None:
                 "edge_colors": [color.name for color in face_state[:6]],
                 "corner_colors": [color.name for color in face_state[6:]],
             }
-            for face, face_state in zip(PeriodicBoard().faces, state.stickers, strict=True)
+            for face, face_state in zip(PeriodicBoard(state.mode).faces, state.stickers, strict=True)
         ],
     }
     temporary_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
@@ -184,11 +201,18 @@ def _serialize_setup_move(setup_move: SetupMove | None) -> dict[str, object] | N
     }
 
 
-def _parse_colors(value: object, field_name: str) -> tuple[FaceColor, ...]:
+def _parse_colors(
+    value: object,
+    field_name: str,
+    allowed_colors: set[FaceColor],
+) -> tuple[FaceColor, ...]:
     """Parse one six-color sticker list with a field-specific error."""
     if not isinstance(value, list) or len(value) != 6 or any(not isinstance(item, str) for item in value):
         raise ValueError(f"'{field_name}' must contain exactly six color names.")
     try:
-        return tuple(FaceColor[item] for item in value)
+        colors = tuple(FaceColor[item] for item in value)
     except KeyError as error:
         raise ValueError(f"'{field_name}' contains an unknown color: {error.args[0]!r}.") from error
+    if any(color not in allowed_colors for color in colors):
+        raise ValueError(f"'{field_name}' contains a color unavailable in this game mode.")
+    return colors

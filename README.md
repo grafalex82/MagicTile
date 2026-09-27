@@ -7,7 +7,7 @@ every face to a single color.
 
 Key features:
 
-- An infinite periodic hexagonal board with exact animated 60-degree turns.
+- Torus and Klein-bottle infinite boards with exact animated 60-degree turns.
 - A complete game loop with multiple scramble lengths, move counting, and
   automatic solved-state detection.
 - Mouse-driven turns, panning, and zooming.
@@ -16,25 +16,86 @@ Key features:
 - Setup Moves that can be recorded and unwound after running a formula.
 - Portable game saves and human-readable configuration.
 
-| Solved board | Scrambled board |
+| Torus mode — solved | Torus mode — scrambled |
 | --- | --- |
 | ![Solved MagicTile board](assets/screenshots/solved-board.png) | ![Scrambled MagicTile board](assets/screenshots/scrambled-board.png) |
 
-## Core concept
+## Board modes
 
-- The board appears infinite but is currently backed by seven logical face
-  objects repeated across coordinate-identified cells.
+The board looks infinite, but it is built by repeating a small set of logical
+faces. The selected mode determines what happens to the pattern when it crosses
+the boundary of that set.
+
+| | Torus mode | Klein bottle mode |
+| --- | --- | --- |
+| Logical faces | 7 | 9, arranged as a 3-by-3 block |
+| Vertical repetition | Same orientation | Same orientation |
+| Horizontal repetition | Same orientation | Alternates between normal and mirrored blocks |
+| Copies of a turned face | All rotate in the same screen direction | Mirrored copies rotate in the opposite screen direction |
+
+### Torus mode
+
+Torus mode is the original, simpler board. Imagine joining the left edge of the
+pattern to the right edge and the top edge to the bottom edge. Moving far enough
+in any direction brings you back to the same face with exactly the same
+surroundings and orientation.
+
+### Klein bottle mode
+
+A Klein bottle is a fascinating one-sided surface. If you travel along it in a
+suitable direction, you can return to the same point from the other side: your
+local orientation has been reversed. A picture carried around that path would
+therefore appear mirrored when it returned. This is the idea behind the
+reflected faces in Klein bottle mode—the mirror image is not a separate face,
+but the same face reached with the opposite orientation.
+
+The puzzle represents this behavior with a 3-by-3 base block containing nine
+differently colored faces. The block repeats normally from top to bottom. From
+left to right, every second block is reflected across the X axis: left and right
+stay in place, while top and bottom swap.
+
+```text
+horizontal repetition:
+
+normal 3x3 block  →  mirrored 3x3 block  →  normal 3x3 block  →  ...
+                         Y is flipped
+```
+
+This means that the same logical face can be visible in both normal and mirrored
+forms. Turning a normal copy clockwise turns every normal copy clockwise and
+every mirrored copy counterclockwise. Clicking a mirrored copy works naturally:
+the clicked copy follows the requested direction, while normal copies move in
+the opposite direction.
+
+Corner pieces also have a handedness in this mode: they can occur in either a
+normal or a mirrored orientation. These are different corner configurations,
+even when they involve the same colors. A mirrored corner cannot be used in a
+position that requires its normal counterpart, or vice versa, so a correct
+solution must match both the colors and the corner orientation.
+
+| Klein bottle mode — solved | Klein bottle mode — scrambled |
+| --- | --- |
+| ![Solved Klein bottle mode board](assets/screenshots/klein-bottle-solved.png) | ![Scrambled Klein bottle mode board](assets/screenshots/klein-bottle-scrambled.png) |
+
+Select **Mode → Torus mode** or **Mode → Klein bottle mode** to switch modes.
+Changing modes resets the board. If a scored game is active, MagicTile asks for
+confirmation before discarding it. The selected mode is stored in game saves.
+
+## Gameplay basics
+
 - Hexagons tile the plane without gaps: adjacent faces share an edge, and three
   faces meet at every vertex.
 - A turn affects the selected hexagon's pieces and one surrounding outer ring.
-- All visible copies of the same logical face rotate simultaneously.
+- All visible copies of the same logical face rotate simultaneously according
+  to the selected board mode.
 - The player can pan and zoom the camera.
 - A left click turns a face counterclockwise; a right click turns it clockwise.
 - A new scored game starts from the **Puzzle → Scrumble** menu, with 3, 5, 10,
   or 50 random setup turns.
 - Setup moves can be recorded, retained while a formula or macro runs, and
   unwound automatically in reverse.
-- The game state can be saved and restored between sessions.
+- The game state, including its board mode, can be saved and restored between
+  sessions.
 
 See the [design document](docs/DESIGN.md) for the rules and architecture.
 
@@ -143,10 +204,10 @@ stored in game save files and restored when the save is opened.
 ### Saving and loading
 
 Use **File → Save** (Ctrl+S) or **File → Save As** to write the current board,
-active-game flag, used-move count, and active Setup Move to a versioned JSON
-file. Use **File → Open** (Ctrl+O) to restore that file later. Loading a game
-clears the previous session's undo/redo history and any transient animation or
-macro state.
+board mode, active-game flag, used-move count, and active Setup Move to a
+versioned JSON file. Use **File → Open** (Ctrl+O) to restore that file later.
+Loading a game clears the previous session's undo/redo history and any
+transient animation or macro state.
 
 ## Tests
 

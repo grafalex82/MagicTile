@@ -5,10 +5,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtGui import QAction, QColor, QImage, QKeyEvent, QKeySequence, QPainter
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtTest import QTest
 
-from magic_tile.domain import HexCoordinate, PeriodicBoard, TurnDirection
+from magic_tile.domain import BoardMode, HexCoordinate, PeriodicBoard, TurnDirection
 from magic_tile.input import SetupMove, TurnCommand, parse_macro, serialize_macro
 from magic_tile.persistence import GameState, Settings
 from magic_tile.ui.camera import Camera
@@ -200,7 +200,12 @@ def test_main_menu_has_requested_structure_and_game_file_commands(application) -
     window = GameWindow(Settings())
     window.board_widget._frame_timer.stop()
 
-    assert [action.text() for action in window.menuBar().actions()] == ["File", "Puzzle", "Macro"]
+    assert [action.text() for action in window.menuBar().actions()] == [
+        "File",
+        "Puzzle",
+        "Mode",
+        "Macro",
+    ]
     assert [action.text() for action in window.file_menu.actions()] == [
         "Open",
         "Save",
@@ -221,6 +226,11 @@ def test_main_menu_has_requested_structure_and_game_file_commands(application) -
         "10 moves",
         "50 moves",
     ]
+    assert [action.text() for action in window.mode_menu.actions()] == [
+        "Torus mode",
+        "Klein bottle mode",
+    ]
+    assert window.mode_actions[BoardMode.TORUS].isChecked()
     assert [action.text() for action in window.macro_menu.actions()] == [
         "Record",
         "Play",
@@ -248,6 +258,54 @@ def test_main_menu_has_requested_structure_and_game_file_commands(application) -
     assert window.end_setup_move_action.shortcut() == QKeySequence("F2")
     assert window.unwind_setup_move_action.shortcut() == QKeySequence("F3")
 
+    window.close()
+
+
+def test_switching_mode_resets_free_play_without_confirmation(application, monkeypatch) -> None:
+    window = GameWindow(Settings())
+    window.board_widget._frame_timer.stop()
+    window.board_widget._perform_new_turn(
+        TurnCommand(HexCoordinate(0, 0), TurnDirection.CLOCKWISE)
+    )
+    asked = []
+    monkeypatch.setattr(
+        "magic_tile.ui.game_window.QMessageBox.question",
+        lambda *args: asked.append(args),
+    )
+
+    window.mode_actions[BoardMode.KLEIN_BOTTLE].trigger()
+
+    assert asked == []
+    assert window.board_widget.board.mode is BoardMode.KLEIN_BOTTLE
+    assert window.board_widget.board.is_solved()
+    assert window.mode_actions[BoardMode.KLEIN_BOTTLE].isChecked()
+    window.close()
+
+
+def test_switching_mode_during_scored_game_requires_confirmation(application, monkeypatch) -> None:
+    window = GameWindow(Settings())
+    window.board_widget._frame_timer.stop()
+    window.board_widget.scrumble()
+    monkeypatch.setattr(
+        "magic_tile.ui.game_window.QMessageBox.question",
+        lambda *args: QMessageBox.StandardButton.No,
+    )
+
+    window.mode_actions[BoardMode.KLEIN_BOTTLE].trigger()
+
+    assert window.board_widget.board.mode is BoardMode.TORUS
+    assert window.board_widget.game_active
+    assert window.mode_actions[BoardMode.TORUS].isChecked()
+
+    monkeypatch.setattr(
+        "magic_tile.ui.game_window.QMessageBox.question",
+        lambda *args: QMessageBox.StandardButton.Yes,
+    )
+    window.mode_actions[BoardMode.KLEIN_BOTTLE].trigger()
+
+    assert window.board_widget.board.mode is BoardMode.KLEIN_BOTTLE
+    assert not window.board_widget.game_active
+    assert window.board_widget.move_count == 0
     window.close()
 
 

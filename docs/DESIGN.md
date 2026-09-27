@@ -9,7 +9,8 @@ implemented game loop.
 ### Board
 
 The game board is a flat tiling of regular hexagons. Every hexagon shares its
-edges with neighboring hexagons, and three hexagons meet at each vertex.
+edges with neighboring hexagons, and three hexagons meet at each vertex. It can
+use either a torus or Klein-bottle periodic quotient.
 
 The player sees a finite viewport onto an infinite plane and can:
 
@@ -17,11 +18,12 @@ The player sees a finite viewport onto an infinite plane and can:
 - zoom in and out;
 - select any visible face for rotation.
 
-The infinite plane is virtual. The current configuration contains seven logical
-face objects that repeat periodically across coordinate-identified cells. A
-face itself has no coordinate: cells at different coordinates can resolve to the
-same in-memory object. The seven objects form a torus; following any fixed
-neighbor direction seven times returns to the starting face.
+The infinite plane is virtual. Torus mode contains seven logical face objects.
+Klein bottle mode contains a 3-by-3 block of nine logical faces, repeats it
+vertically, and alternates normal and X-axis-reflected blocks horizontally. A
+face itself has no coordinate: cells at different coordinates can resolve to
+the same in-memory object. Reflected occurrences map their screen-facing edge
+and corner indices back to the face's canonical sticker slots.
 
 ### Piece terminology
 

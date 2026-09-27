@@ -144,11 +144,12 @@ def render_static_board(
 def _draw_faces(painter, board, visible, height: int, zoom: float) -> None:
     for q, r, center in visible:
         # Resolve the logical face and reuse its cached raster image.
-        face = board.face_at(HexCoordinate(q, r))
+        occurrence = board.occurrence_at(HexCoordinate(q, r))
         face_image = _render_face_image(
             height,
-            face,
+            occurrence.face,
             zoom,
+            occurrence.mirrored,
         )
 
         # Center the face image on this periodic screen-space occurrence.
@@ -165,10 +166,11 @@ def _render_face_image(
     height: int,
     face: Face,
     zoom: float,
+    mirrored: bool = False,
 ) -> QImage:
     """Render one reusable static face image for all of its periodic copies."""
     # Include current colors in the internal key because Face is mutable.
-    cache_key = (height, face, face.color, face.edge_colors, face.corner_colors, zoom)
+    cache_key = (height, face, face.color, face.edge_colors, face.corner_colors, zoom, mirrored)
     cached_image = _FACE_IMAGE_CACHE.get(cache_key)
     if cached_image is not None:
         _FACE_IMAGE_CACHE.move_to_end(cache_key)
@@ -193,7 +195,7 @@ def _render_face_image(
     try:
         image_painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         image_painter.translate(half_width, half_height)
-        _draw_cell(image_painter, face, geometry, zoom)
+        _draw_cell(image_painter, face, geometry, zoom, mirrored=mirrored)
     finally:
         # Finalize the cached image on both success and failure.
         image_painter.end()
@@ -211,6 +213,8 @@ def _draw_cell(
     geometry: _CellGeometry,
     zoom: float,
     overrides: dict[tuple[Face, str, int], FaceColor] | None = None,
+    *,
+    mirrored: bool = False,
 ) -> None:
     # Fill the fixed center color as the base of the cell.
     overrides = overrides or {}
@@ -220,14 +224,16 @@ def _draw_cell(
     painter.drawPolygon(vertices)
 
     # Overlay edge pieces, using pre-turn colors during animation.
-    for index, points in enumerate(geometry.edges):
+    for screen_index, points in enumerate(geometry.edges):
         if len(points) >= 3:
+            index = (1 - screen_index) % 6 if mirrored else screen_index
             painter.setBrush(_color(overrides.get((face, "edge", index), face.edge_colors[index])))
             painter.drawPolygon(points)
 
     # Overlay corner pieces after edges so their intersections stay visible.
-    for index, points in enumerate(geometry.corners):
+    for screen_index, points in enumerate(geometry.corners):
         if len(points) >= 3:
+            index = (-screen_index) % 6 if mirrored else screen_index
             painter.setBrush(_color(overrides.get((face, "corner", index), face.corner_colors[index])))
             painter.drawPolygon(points)
 
@@ -254,17 +260,24 @@ def _draw_turn_animation(painter, board, visible, animation, now, height, zoom) 
     turning_faces = set(animation.turning_faces)
     radius = round(HEX_HEIGHT * zoom * TURN_GUIDE_DIAMETER_SCALE / 2)
     angle = animation.angle_degrees(now)
-    centers_by_face: dict[Face, list[tuple[float, float]]] = {}
+    occurrences: dict[tuple[Face, bool], tuple[HexCoordinate, list[tuple[float, float]]]] = {}
 
     # Group every visible periodic occurrence by its logical face.
     for q, r, center in visible:
-        focus = board.face_at(HexCoordinate(q, r))
-        if focus in turning_faces:
-            centers_by_face.setdefault(focus, []).append(center)
+        coordinate = HexCoordinate(q, r)
+        occurrence = board.occurrence_at(coordinate)
+        if occurrence.face in turning_faces:
+            key = (occurrence.face, occurrence.mirrored)
+            if key not in occurrences:
+                occurrences[key] = (coordinate, [])
+            occurrences[key][1].append(center)
 
-    # Render each logical disk once and reuse it at all matching centers.
-    for focus, centers in centers_by_face.items():
-        turn_image = _render_turn_image(animation, focus, angle, height, zoom, radius)
+    # Render each logical orientation once and reuse it at matching centers.
+    for (_, mirrored), (coordinate, centers) in occurrences.items():
+        visual_angle = -angle if mirrored else angle
+        turn_image = _render_turn_image(
+            animation, board, coordinate, visual_angle, height, zoom, radius
+        )
         half_width = turn_image.width() // 2
         half_height = turn_image.height() // 2
         for center in centers:
@@ -274,7 +287,7 @@ def _draw_turn_animation(painter, board, visible, animation, now, height, zoom) 
             )
 
 
-def _render_turn_image(animation, focus, angle, height, zoom, radius) -> QImage:
+def _render_turn_image(animation, board, coordinate, angle, height, zoom, radius) -> QImage:
     """Render one moving disk for reuse at every visible periodic copy."""
     # Create a transparent odd-sized canvas with room for boundary strokes.
     padding = max(3, round(GRID_WIDTH * zoom / 2) + 1)
@@ -288,8 +301,19 @@ def _render_turn_image(animation, focus, angle, height, zoom, radius) -> QImage:
         painter.translate(size // 2, size // 2)
         painter.rotate(angle)
         geometries = _cell_geometries(height)
-        for face, geometry in zip((focus,) + focus.neighbors, geometries, strict=True):
-            _draw_cell(painter, face, geometry, zoom, animation.source_colors)
+        coordinates = (coordinate,) + tuple(
+            coordinate.translated(dq, dr) for dq, dr in board.NEIGHBOUR_DIRECTIONS
+        )
+        for cell_coordinate, geometry in zip(coordinates, geometries, strict=True):
+            occurrence = board.occurrence_at(cell_coordinate)
+            _draw_cell(
+                painter,
+                occurrence.face,
+                geometry,
+                zoom,
+                animation.source_colors,
+                mirrored=occurrence.mirrored,
+            )
 
         # Apply a pixel-aligned alpha mask after drawing the full moving region.
         painter.resetTransform()

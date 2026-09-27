@@ -3,6 +3,7 @@ from collections import Counter
 import pytest
 
 from magic_tile.domain import (
+    BoardMode,
     FaceColor,
     HexCoordinate,
     PeriodicBoard,
@@ -16,7 +17,7 @@ def test_coordinates_resolve_to_seven_coordinate_free_face_objects() -> None:
     assert len(board.faces) == 7
     assert all(not hasattr(face, "coordinate") for face in board.faces)
     assert board.face_at(HexCoordinate(0, 0)) is board.face_at(HexCoordinate(7, 0))
-    assert {face.color for face in board.faces} == set(FaceColor)
+    assert {face.color for face in board.faces} == set(board.TORUS_COLORS)
 
 
 def test_each_face_contains_six_edges_and_six_corners() -> None:
@@ -37,7 +38,7 @@ def test_center_and_ring_contain_each_color_once() -> None:
     colors.extend(face.color for face in focus.neighbors)
 
     assert len(set(colors)) == 7
-    assert set(colors) == set(FaceColor)
+    assert set(colors) == set(board.TORUS_COLORS)
 
 
 def test_colors_around_white_center_match_reference_directions() -> None:
@@ -201,4 +202,62 @@ def test_invalid_sticker_state_is_rejected_without_changing_board() -> None:
     with pytest.raises(ValueError):
         board.restore_sticker_state(original[:-1])
 
+    assert board.sticker_state() == original
+
+
+def test_klein_bottle_uses_nine_faces_and_alternating_mirrored_blocks() -> None:
+    board = PeriodicBoard(BoardMode.KLEIN_BOTTLE)
+
+    assert len(board.faces) == 9
+    assert [
+        [board.face_at(HexCoordinate(q, r)).color for q in range(3)]
+        for r in range(3)
+    ] == [
+        [FaceColor.DARK_GREEN, FaceColor.YELLOW, FaceColor.WHITE],
+        [FaceColor.PURPLE, FaceColor.RED, FaceColor.ORANGE],
+        [FaceColor.CYAN, FaceColor.LIGHT_GRAY, FaceColor.BLUE],
+    ]
+    assert all(not board.occurrence_at(HexCoordinate(q, 0)).mirrored for q in range(3))
+    assert all(board.occurrence_at(HexCoordinate(q, 0)).mirrored for q in range(3, 6))
+    assert all(not board.occurrence_at(HexCoordinate(q, 0)).mirrored for q in range(6, 9))
+
+
+def test_klein_bottle_repeats_vertically_and_reflects_across_horizontal_blocks() -> None:
+    board = PeriodicBoard(BoardMode.KLEIN_BOTTLE)
+
+    for coordinate in board.representative_coordinates:
+        assert board.face_at(coordinate.translated(0, 3)) is board.face_at(coordinate)
+
+    # The first face reappears reflected in the next block and normally after
+    # two blocks, matching the supplied solved-board reference.
+    original = HexCoordinate(0, 0)
+    mirrored = HexCoordinate(3, 2)
+    repeated = HexCoordinate(6, 0)
+    assert board.face_at(mirrored) is board.face_at(original)
+    assert board.occurrence_at(mirrored).mirrored
+    assert board.face_at(repeated) is board.face_at(original)
+    assert not board.occurrence_at(repeated).mirrored
+
+
+def test_turning_a_mirrored_copy_inverts_the_canonical_direction() -> None:
+    direct = PeriodicBoard(BoardMode.KLEIN_BOTTLE)
+    mirrored = PeriodicBoard(BoardMode.KLEIN_BOTTLE)
+
+    direct.turn(HexCoordinate(0, 0), TurnDirection.COUNTERCLOCKWISE)
+    mirrored.turn(HexCoordinate(3, 2), TurnDirection.CLOCKWISE)
+
+    assert mirrored.sticker_state() == direct.sticker_state()
+
+
+def test_klein_bottle_turn_and_inverse_preserve_every_sticker() -> None:
+    board = PeriodicBoard(BoardMode.KLEIN_BOTTLE)
+    original = board.sticker_state()
+    original_counts = Counter(color for face_state in original for color in face_state)
+
+    board.turn(HexCoordinate(3, 2), TurnDirection.CLOCKWISE)
+
+    assert Counter(
+        color for face_state in board.sticker_state() for color in face_state
+    ) == original_counts
+    board.turn(HexCoordinate(3, 2), TurnDirection.COUNTERCLOCKWISE)
     assert board.sticker_state() == original

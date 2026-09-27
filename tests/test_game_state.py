@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from magic_tile.domain import HexCoordinate, PeriodicBoard, TurnDirection
+from magic_tile.domain import BoardMode, HexCoordinate, PeriodicBoard, TurnDirection
 from magic_tile.input import SetupMove, TurnCommand
 from magic_tile.persistence import GameState, load_game_state, save_game_state
 from magic_tile.persistence.game_state import GAME_STATE_FORMAT, GAME_STATE_VERSION
@@ -56,6 +56,18 @@ def test_game_state_loads_without_an_optional_setup_move(tmp_path) -> None:
     path.write_text(json.dumps(data), encoding="utf-8")
 
     assert load_game_state(path).setup_move is None
+
+
+def test_game_state_without_mode_field_remains_a_torus_save(tmp_path) -> None:
+    path = tmp_path / "old.json"
+    save_game_state(GameState.capture(PeriodicBoard(), game_active=False, move_count=0), path)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data.pop("mode")
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    loaded = load_game_state(path)
+
+    assert loaded.mode is BoardMode.TORUS
 
 
 def test_game_state_treats_an_empty_finished_setup_move_as_inactive(tmp_path) -> None:
@@ -115,3 +127,20 @@ def test_invalid_game_state_files_are_rejected(tmp_path, change) -> None:
 
     with pytest.raises(ValueError):
         load_game_state(path)
+
+
+def test_klein_bottle_mode_round_trips_without_a_save_version_bump(tmp_path) -> None:
+    board = PeriodicBoard(BoardMode.KLEIN_BOTTLE)
+    board.turn(HexCoordinate(3, 2), TurnDirection.CLOCKWISE)
+    path = tmp_path / "klein.json"
+
+    save_game_state(GameState.capture(board, game_active=True, move_count=4), path)
+    loaded = load_game_state(path)
+    restored = PeriodicBoard(BoardMode.KLEIN_BOTTLE)
+    loaded.restore_board(restored)
+
+    assert loaded.mode is BoardMode.KLEIN_BOTTLE
+    assert restored.sticker_state() == board.sticker_state()
+    document = json.loads(path.read_text(encoding="utf-8"))
+    assert document["version"] == GAME_STATE_VERSION
+    assert document["mode"] == BoardMode.KLEIN_BOTTLE.value
